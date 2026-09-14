@@ -1,0 +1,1756 @@
+{
+ "screen": [
+  640,
+  448
+ ],
+ "title": {
+  "x": 320,
+  "baseline": 45,
+  "size": 30,
+  "max_width": 270,
+  "spacing": 1,
+  "top": [
+   255,
+   224,
+   116
+  ],
+  "bottom": [
+   236,
+   108,
+   16
+  ],
+  "stroke": [
+   58,
+   24,
+   6
+  ],
+  "stroke_px": 3,
+  "shadow": [
+   0,
+   0,
+   0,
+   0.6
+  ],
+  "shadow_dx": 1,
+  "shadow_dy": 2
+ },
+ "arrows": {
+  "prev": [
+   128,
+   16,
+   54,
+   29
+  ],
+  "next": [
+   458,
+   16,
+   54,
+   29
+  ]
+ },
+ "header": {
+  "rect": [
+   16,
+   58,
+   608,
+   28
+  ],
+  "img": "header.png"
+ },
+ "label": {
+  "size": 16,
+  "fill": [
+   246,
+   216,
+   128
+  ],
+  "shadow": [
+   36,
+   18,
+   4
+  ]
+ },
+ "rows": {
+  "y": 88,
+  "pitch": 26,
+  "count": 10,
+  "size": 15,
+  "medal_h": 16,
+  "fill": [
+   238,
+   228,
+   204
+  ],
+  "dim": [
+   170,
+   160,
+   140
+  ]
+ },
+ "auction_rows": {
+  "y": 88,
+  "pitch": 52,
+  "count": 5,
+  "thumb": [
+   36,
+   48
+  ]
+ },
+ "sep": {
+  "rect": [
+   16,
+   348,
+   608,
+   10
+  ],
+  "img": "sep.png"
+ },
+ "info": {
+  "rect": [
+   20,
+   358,
+   600,
+   19
+  ],
+  "size": 13,
+  "fill": [
+   214,
+   190,
+   130
+  ]
+ },
+ "status": {
+  "rect": [
+   20,
+   377,
+   600,
+   18
+  ],
+  "size": 13,
+  "fill": [
+   184,
+   172,
+   146
+  ]
+ },
+ "tabs": {
+  "x0": 20,
+  "y": 400,
+  "w": 84,
+  "h": 36,
+  "gap": 2,
+  "size": 14,
+  "pad": 12,
+  "fill": [
+   [
+    236,
+    222,
+    190
+   ],
+   [
+    255,
+    226,
+    120
+   ],
+   [
+    214,
+    196,
+    160
+   ]
+  ]
+ },
+ "columns": {
+  "rank": {
+   "rank": [
+    56,
+    "right"
+   ],
+   "last": [
+    104,
+    "center"
+   ],
+   "name": [
+    152,
+    "left"
+   ],
+   "value": [
+    604,
+    "right"
+   ]
+  },
+  "live": {
+   "rank": [
+    56,
+    "right"
+   ],
+   "name": [
+    84,
+    "left"
+   ],
+   "games": [
+    372,
+    "right"
+   ],
+   "rating": [
+    486,
+    "right"
+   ],
+   "prize": [
+    604,
+    "right"
+   ]
+  },
+  "auction": {
+   "card": [
+    22,
+    "left"
+   ],
+   "name": [
+    66,
+    "left"
+   ],
+   "seller": [
+    236,
+    "left"
+   ],
+   "price": [
+    420,
+    "right"
+   ],
+   "who": [
+    436,
+    "left"
+   ],
+   "left": [
+    604,
+    "right"
+   ]
+  }
+ },
+ "side": {
+  "w": 220,
+  "gap": 14
+ },
+ "watch": {
+  "boards": {
+   "16": {
+    "img": "board16.png",
+    "x": [
+     22,
+     100,
+     178,
+     256,
+     334
+    ],
+    "y": [
+     37,
+     127,
+     217,
+     307,
+     397
+    ],
+    "cols": 4
+   },
+   "25": {
+    "img": "board25.png",
+    "x": [
+     8,
+     76,
+     144,
+     212,
+     280,
+     348
+    ],
+    "y": [
+     22,
+     102,
+     182,
+     262,
+     342,
+     422
+    ],
+    "cols": 5
+   }
+  },
+  "bases": [
+   "base_b.png",
+   "base_r.png",
+   "base_g.png"
+  ],
+  "back": "base_bk.png",
+  "blocks": {
+   "plain": "block_st.png",
+   "chance": "block_ch.png",
+   "rot": "block_rot.png"
+  },
+  "rot": {
+   "arrow": "rot_arrow.png",
+   "glow": "rot_glow.png"
+  },
+  "roulette": {
+   "reel2": [
+    "reel2a.png",
+    "reel2b.png",
+    "reel2c.png",
+    "reel2d.png",
+    "reel2e.png",
+    "reel2f.png"
+   ],
+   "reel3": [
+    "reel3a.png",
+    "reel3b.png",
+    "reel3c.png",
+    "reel3d.png",
+    "reel3e.png",
+    "reel3f.png",
+    "reel3g.png",
+    "reel3h.png",
+    "reel3i.png"
+   ],
+   "arm": "rl_arm.png",
+   "ornA": "rl_orn_a.png",
+   "ornB": "rl_orn_b.png",
+   "tassel": "rl_tassel.png"
+  },
+  "hilight": "hilight.png",
+  "digits": [
+   "dy0.png",
+   "dy1.png",
+   "dy2.png",
+   "dy3.png",
+   "dy4.png",
+   "dy5.png",
+   "dy6.png",
+   "dy7.png",
+   "dy8.png",
+   "dy9.png"
+  ],
+  "combo": "combo.png",
+  "score": {
+   "b": [
+    "pb0.png",
+    "pb1.png",
+    "pb2.png",
+    "pb3.png",
+    "pb4.png",
+    "pb5.png",
+    "pb6.png",
+    "pb7.png",
+    "pb8.png",
+    "pb9.png"
+   ],
+   "r": [
+    "pr0.png",
+    "pr1.png",
+    "pr2.png",
+    "pr3.png",
+    "pr4.png",
+    "pr5.png",
+    "pr6.png",
+    "pr7.png",
+    "pr8.png",
+    "pr9.png"
+   ],
+   "g": [
+    "pg0.png",
+    "pg1.png",
+    "pg2.png",
+    "pg3.png",
+    "pg4.png",
+    "pg5.png",
+    "pg6.png",
+    "pg7.png",
+    "pg8.png",
+    "pg9.png"
+   ]
+  },
+  "plates": {
+   "n": "plate_n.png",
+   "b": "plate_b.png",
+   "r": "plate_r.png",
+   "g": "plate_g.png"
+  },
+  "start": "game_start.png",
+  "start_halves": [
+   "gs_game.png",
+   "gs_start.png"
+  ],
+  "win_layers": [
+   "win_face.png",
+   "win_shadow.png"
+  ],
+  "win": "win.png",
+  "draw": "draw.png",
+  "boom": [
+   "boom0.png",
+   "boom1.png",
+   "boom2.png",
+   "boom3.png",
+   "boom4.png",
+   "boom5.png",
+   "boom6.png",
+   "boom7.png",
+   "boom8.png",
+   "boom9.png"
+  ],
+  "hand": "hand.png",
+  "icons": {
+   "1": "sp_1.png",
+   "2": "sp_2.png",
+   "3": "sp_3.png"
+  },
+  "num": [
+   "nm0.png",
+   "nm1.png",
+   "nm2.png",
+   "nm3.png",
+   "nm4.png",
+   "nm5.png",
+   "nm6.png",
+   "nm7.png",
+   "nm8.png",
+   "nm9.png"
+  ],
+  "combo_digits": [
+   "cd0.png",
+   "cd1.png",
+   "cd2.png",
+   "cd3.png",
+   "cd4.png",
+   "cd5.png",
+   "cd6.png",
+   "cd7.png",
+   "cd8.png",
+   "cd9.png"
+  ],
+  "glyphs": {
+   "0": "st_0.png",
+   "1": "st_1.png",
+   "2": "st_2.png",
+   "3": "st_3.png",
+   "4": "st_4.png",
+   "5": "st_5.png",
+   "6": "st_6.png",
+   "7": "st_7.png",
+   "8": "st_8.png",
+   "9": "st_9.png",
+   "*": "st_star.png",
+   "P": "st_p.png",
+   "M": "st_m.png",
+   "X": "st_x.png",
+   "A": "st_a.png"
+  },
+  "card_arrows": [
+   "ca0.png",
+   "ca1.png",
+   "ca2.png",
+   "ca3.png",
+   "ca4.png",
+   "ca5.png",
+   "ca6.png",
+   "ca7.png"
+  ],
+  "card_face": {
+   "stats_x": [
+    -18,
+    -6,
+    6,
+    18
+   ],
+   "stats_y": 26,
+   "arrow_dx": 37,
+   "arrow_dy": 45,
+   "cell": 16
+  },
+  "fx": {
+   "hit": [
+    "fx_hit_00.png",
+    "fx_hit_01.png",
+    "fx_hit_02.png",
+    "fx_hit_03.png",
+    "fx_hit_04.png",
+    "fx_hit_05.png",
+    "fx_hit_06.png",
+    "fx_hit_07.png",
+    "fx_hit_08.png",
+    "fx_hit_09.png",
+    "fx_hit_10.png",
+    "fx_hit_11.png"
+   ],
+   "smoke": [
+    "fx_smoke_00.png",
+    "fx_smoke_01.png",
+    "fx_smoke_02.png",
+    "fx_smoke_03.png",
+    "fx_smoke_04.png",
+    "fx_smoke_05.png",
+    "fx_smoke_06.png",
+    "fx_smoke_07.png",
+    "fx_smoke_08.png",
+    "fx_smoke_09.png",
+    "fx_smoke_10.png",
+    "fx_smoke_11.png"
+   ],
+   "reaper": [
+    "fx_reaper_00.png",
+    "fx_reaper_01.png",
+    "fx_reaper_02.png",
+    "fx_reaper_03.png",
+    "fx_reaper_04.png",
+    "fx_reaper_05.png"
+   ],
+   "girl": [
+    "fx_girl_00.png",
+    "fx_girl_01.png",
+    "fx_girl_02.png",
+    "fx_girl_03.png",
+    "fx_girl_04.png",
+    "fx_girl_05.png"
+   ],
+   "up": [
+    "fx_up_00.png",
+    "fx_up_01.png",
+    "fx_up_02.png",
+    "fx_up_03.png"
+   ],
+   "take": [
+    "fx_take_00.png",
+    "fx_take_01.png",
+    "fx_take_02.png",
+    "fx_take_03.png",
+    "fx_take_04.png",
+    "fx_take_05.png"
+   ],
+   "shards": [
+    "fx_shards_00.png",
+    "fx_shards_01.png",
+    "fx_shards_02.png",
+    "fx_shards_03.png",
+    "fx_shards_04.png",
+    "fx_shards_05.png",
+    "fx_shards_06.png",
+    "fx_shards_07.png"
+   ],
+   "orb": [
+    "fx_orb_00.png",
+    "fx_orb_01.png"
+   ],
+   "burst": [
+    "fx_burst_00.png",
+    "fx_burst_01.png",
+    "fx_burst_02.png",
+    "fx_burst_03.png"
+   ],
+   "bolt": [
+    "fx_bolt_00.png",
+    "fx_bolt_01.png",
+    "fx_bolt_02.png",
+    "fx_bolt_03.png",
+    "fx_bolt_04.png",
+    "fx_bolt_05.png"
+   ],
+   "chips": [
+    "fx_chips_00.png",
+    "fx_chips_01.png",
+    "fx_chips_02.png",
+    "fx_chips_03.png"
+   ]
+  },
+  "sizes": {
+   "board16.png": [
+    360,
+    448
+   ],
+   "board25.png": [
+    360,
+    448
+   ],
+   "base_b.png": [
+    80,
+    96
+   ],
+   "base_r.png": [
+    80,
+    96
+   ],
+   "base_g.png": [
+    80,
+    96
+   ],
+   "pb0.png": [
+    22,
+    32
+   ],
+   "pb1.png": [
+    14,
+    32
+   ],
+   "pb2.png": [
+    22,
+    32
+   ],
+   "pb3.png": [
+    18,
+    32
+   ],
+   "pb4.png": [
+    22,
+    32
+   ],
+   "pb5.png": [
+    22,
+    32
+   ],
+   "pb6.png": [
+    22,
+    32
+   ],
+   "pb7.png": [
+    21,
+    32
+   ],
+   "pb8.png": [
+    22,
+    32
+   ],
+   "pb9.png": [
+    22,
+    32
+   ],
+   "pr0.png": [
+    22,
+    32
+   ],
+   "pr1.png": [
+    11,
+    32
+   ],
+   "pr2.png": [
+    18,
+    32
+   ],
+   "pr3.png": [
+    15,
+    32
+   ],
+   "pr4.png": [
+    21,
+    32
+   ],
+   "pr5.png": [
+    18,
+    32
+   ],
+   "pr6.png": [
+    19,
+    32
+   ],
+   "pr7.png": [
+    17,
+    32
+   ],
+   "pr8.png": [
+    19,
+    32
+   ],
+   "pr9.png": [
+    21,
+    32
+   ],
+   "pg0.png": [
+    22,
+    32
+   ],
+   "pg1.png": [
+    11,
+    32
+   ],
+   "pg2.png": [
+    19,
+    32
+   ],
+   "pg3.png": [
+    16,
+    32
+   ],
+   "pg4.png": [
+    21,
+    32
+   ],
+   "pg5.png": [
+    18,
+    32
+   ],
+   "pg6.png": [
+    19,
+    32
+   ],
+   "pg7.png": [
+    17,
+    32
+   ],
+   "pg8.png": [
+    18,
+    32
+   ],
+   "pg9.png": [
+    20,
+    32
+   ],
+   "base_bk.png": [
+    80,
+    96
+   ],
+   "block_st.png": [
+    80,
+    96
+   ],
+   "block_ch.png": [
+    80,
+    96
+   ],
+   "block_rot.png": [
+    82,
+    98
+   ],
+   "rot_arrow.png": [
+    30,
+    30
+   ],
+   "rot_glow.png": [
+    40,
+    40
+   ],
+   "reel2a.png": [
+    56,
+    200
+   ],
+   "reel2b.png": [
+    56,
+    200
+   ],
+   "reel2c.png": [
+    56,
+    200
+   ],
+   "reel2d.png": [
+    56,
+    200
+   ],
+   "reel2e.png": [
+    56,
+    200
+   ],
+   "reel2f.png": [
+    56,
+    200
+   ],
+   "reel3a.png": [
+    56,
+    200
+   ],
+   "reel3b.png": [
+    56,
+    200
+   ],
+   "reel3c.png": [
+    56,
+    200
+   ],
+   "reel3d.png": [
+    56,
+    200
+   ],
+   "reel3e.png": [
+    56,
+    200
+   ],
+   "reel3f.png": [
+    56,
+    200
+   ],
+   "reel3g.png": [
+    56,
+    200
+   ],
+   "reel3h.png": [
+    56,
+    200
+   ],
+   "reel3i.png": [
+    56,
+    200
+   ],
+   "rl_arm.png": [
+    207,
+    71
+   ],
+   "rl_orn_a.png": [
+    95,
+    31
+   ],
+   "rl_orn_b.png": [
+    95,
+    31
+   ],
+   "rl_tassel.png": [
+    95,
+    216
+   ],
+   "hilight.png": [
+    84,
+    100
+   ],
+   "dy0.png": [
+    18,
+    22
+   ],
+   "dy1.png": [
+    14,
+    22
+   ],
+   "dy2.png": [
+    19,
+    22
+   ],
+   "dy3.png": [
+    19,
+    22
+   ],
+   "dy4.png": [
+    20,
+    22
+   ],
+   "dy5.png": [
+    18,
+    22
+   ],
+   "dy6.png": [
+    18,
+    22
+   ],
+   "dy7.png": [
+    19,
+    22
+   ],
+   "dy8.png": [
+    19,
+    22
+   ],
+   "dy9.png": [
+    18,
+    22
+   ],
+   "combo.png": [
+    112,
+    32
+   ],
+   "plate_n.png": [
+    155,
+    20
+   ],
+   "plate_b.png": [
+    155,
+    20
+   ],
+   "plate_r.png": [
+    155,
+    20
+   ],
+   "plate_g.png": [
+    155,
+    20
+   ],
+   "game_start.png": [
+    230,
+    140
+   ],
+   "gs_game.png": [
+    248,
+    72
+   ],
+   "gs_start.png": [
+    248,
+    72
+   ],
+   "win_face.png": [
+    247,
+    79
+   ],
+   "win_shadow.png": [
+    247,
+    87
+   ],
+   "win.png": [
+    227,
+    74
+   ],
+   "draw.png": [
+    267,
+    65
+   ],
+   "boom0.png": [
+    17,
+    17
+   ],
+   "boom1.png": [
+    22,
+    21
+   ],
+   "boom2.png": [
+    24,
+    22
+   ],
+   "boom3.png": [
+    30,
+    32
+   ],
+   "boom4.png": [
+    38,
+    41
+   ],
+   "boom5.png": [
+    46,
+    45
+   ],
+   "boom6.png": [
+    44,
+    45
+   ],
+   "boom7.png": [
+    33,
+    33
+   ],
+   "boom8.png": [
+    33,
+    33
+   ],
+   "boom9.png": [
+    29,
+    28
+   ],
+   "hand.png": [
+    26,
+    32
+   ],
+   "sp_1.png": [
+    74,
+    70
+   ],
+   "sp_2.png": [
+    74,
+    70
+   ],
+   "sp_3.png": [
+    74,
+    70
+   ],
+   "nm0.png": [
+    24,
+    24
+   ],
+   "nm1.png": [
+    24,
+    24
+   ],
+   "nm2.png": [
+    24,
+    24
+   ],
+   "nm3.png": [
+    24,
+    24
+   ],
+   "nm4.png": [
+    24,
+    24
+   ],
+   "nm5.png": [
+    24,
+    24
+   ],
+   "nm6.png": [
+    24,
+    24
+   ],
+   "nm7.png": [
+    24,
+    24
+   ],
+   "nm8.png": [
+    24,
+    24
+   ],
+   "nm9.png": [
+    24,
+    24
+   ],
+   "cd0.png": [
+    32,
+    32
+   ],
+   "cd1.png": [
+    32,
+    32
+   ],
+   "cd2.png": [
+    32,
+    32
+   ],
+   "cd3.png": [
+    32,
+    32
+   ],
+   "cd4.png": [
+    32,
+    32
+   ],
+   "cd5.png": [
+    32,
+    32
+   ],
+   "cd6.png": [
+    32,
+    32
+   ],
+   "cd7.png": [
+    32,
+    32
+   ],
+   "cd8.png": [
+    32,
+    32
+   ],
+   "cd9.png": [
+    32,
+    32
+   ],
+   "st_0.png": [
+    16,
+    16
+   ],
+   "st_1.png": [
+    16,
+    16
+   ],
+   "st_2.png": [
+    16,
+    16
+   ],
+   "st_3.png": [
+    16,
+    16
+   ],
+   "st_4.png": [
+    16,
+    16
+   ],
+   "st_5.png": [
+    16,
+    16
+   ],
+   "st_6.png": [
+    16,
+    16
+   ],
+   "st_7.png": [
+    16,
+    16
+   ],
+   "st_8.png": [
+    16,
+    16
+   ],
+   "st_9.png": [
+    16,
+    16
+   ],
+   "st_star.png": [
+    16,
+    16
+   ],
+   "st_p.png": [
+    16,
+    16
+   ],
+   "st_m.png": [
+    16,
+    16
+   ],
+   "st_x.png": [
+    16,
+    16
+   ],
+   "st_a.png": [
+    16,
+    16
+   ],
+   "ca0.png": [
+    16,
+    16
+   ],
+   "ca1.png": [
+    16,
+    16
+   ],
+   "ca2.png": [
+    16,
+    16
+   ],
+   "ca3.png": [
+    16,
+    16
+   ],
+   "ca4.png": [
+    16,
+    16
+   ],
+   "ca5.png": [
+    16,
+    16
+   ],
+   "ca6.png": [
+    16,
+    16
+   ],
+   "ca7.png": [
+    16,
+    16
+   ],
+   "fx_hit_00.png": [
+    48,
+    48
+   ],
+   "fx_hit_01.png": [
+    48,
+    48
+   ],
+   "fx_hit_02.png": [
+    48,
+    48
+   ],
+   "fx_hit_03.png": [
+    48,
+    48
+   ],
+   "fx_hit_04.png": [
+    48,
+    48
+   ],
+   "fx_hit_05.png": [
+    48,
+    48
+   ],
+   "fx_hit_06.png": [
+    48,
+    48
+   ],
+   "fx_hit_07.png": [
+    48,
+    48
+   ],
+   "fx_hit_08.png": [
+    48,
+    48
+   ],
+   "fx_hit_09.png": [
+    48,
+    48
+   ],
+   "fx_hit_10.png": [
+    48,
+    48
+   ],
+   "fx_hit_11.png": [
+    48,
+    48
+   ],
+   "fx_smoke_00.png": [
+    48,
+    48
+   ],
+   "fx_smoke_01.png": [
+    48,
+    48
+   ],
+   "fx_smoke_02.png": [
+    48,
+    48
+   ],
+   "fx_smoke_03.png": [
+    48,
+    48
+   ],
+   "fx_smoke_04.png": [
+    48,
+    48
+   ],
+   "fx_smoke_05.png": [
+    48,
+    48
+   ],
+   "fx_smoke_06.png": [
+    48,
+    48
+   ],
+   "fx_smoke_07.png": [
+    48,
+    48
+   ],
+   "fx_smoke_08.png": [
+    48,
+    48
+   ],
+   "fx_smoke_09.png": [
+    48,
+    48
+   ],
+   "fx_smoke_10.png": [
+    48,
+    48
+   ],
+   "fx_smoke_11.png": [
+    48,
+    48
+   ],
+   "fx_reaper_00.png": [
+    80,
+    80
+   ],
+   "fx_reaper_01.png": [
+    80,
+    80
+   ],
+   "fx_reaper_02.png": [
+    80,
+    80
+   ],
+   "fx_reaper_03.png": [
+    80,
+    80
+   ],
+   "fx_reaper_04.png": [
+    80,
+    80
+   ],
+   "fx_reaper_05.png": [
+    80,
+    80
+   ],
+   "fx_girl_00.png": [
+    80,
+    80
+   ],
+   "fx_girl_01.png": [
+    80,
+    80
+   ],
+   "fx_girl_02.png": [
+    80,
+    80
+   ],
+   "fx_girl_03.png": [
+    80,
+    80
+   ],
+   "fx_girl_04.png": [
+    80,
+    80
+   ],
+   "fx_girl_05.png": [
+    80,
+    80
+   ],
+   "fx_up_00.png": [
+    60,
+    56
+   ],
+   "fx_up_01.png": [
+    60,
+    56
+   ],
+   "fx_up_02.png": [
+    60,
+    56
+   ],
+   "fx_up_03.png": [
+    60,
+    56
+   ],
+   "fx_take_00.png": [
+    40,
+    44
+   ],
+   "fx_take_01.png": [
+    40,
+    44
+   ],
+   "fx_take_02.png": [
+    40,
+    44
+   ],
+   "fx_take_03.png": [
+    40,
+    44
+   ],
+   "fx_take_04.png": [
+    40,
+    44
+   ],
+   "fx_take_05.png": [
+    40,
+    44
+   ],
+   "fx_shards_00.png": [
+    32,
+    32
+   ],
+   "fx_shards_01.png": [
+    32,
+    32
+   ],
+   "fx_shards_02.png": [
+    32,
+    32
+   ],
+   "fx_shards_03.png": [
+    32,
+    32
+   ],
+   "fx_shards_04.png": [
+    32,
+    32
+   ],
+   "fx_shards_05.png": [
+    32,
+    32
+   ],
+   "fx_shards_06.png": [
+    32,
+    32
+   ],
+   "fx_shards_07.png": [
+    32,
+    32
+   ],
+   "fx_orb_00.png": [
+    64,
+    64
+   ],
+   "fx_orb_01.png": [
+    64,
+    64
+   ],
+   "fx_burst_00.png": [
+    64,
+    64
+   ],
+   "fx_burst_01.png": [
+    64,
+    64
+   ],
+   "fx_burst_02.png": [
+    64,
+    64
+   ],
+   "fx_burst_03.png": [
+    64,
+    64
+   ],
+   "fx_bolt_00.png": [
+    128,
+    40
+   ],
+   "fx_bolt_01.png": [
+    128,
+    40
+   ],
+   "fx_bolt_02.png": [
+    128,
+    40
+   ],
+   "fx_bolt_03.png": [
+    128,
+    40
+   ],
+   "fx_bolt_04.png": [
+    128,
+    40
+   ],
+   "fx_bolt_05.png": [
+    128,
+    40
+   ],
+   "fx_chips_00.png": [
+    32,
+    32
+   ],
+   "fx_chips_01.png": [
+    32,
+    32
+   ],
+   "fx_chips_02.png": [
+    32,
+    32
+   ],
+   "fx_chips_03.png": [
+    32,
+    32
+   ],
+   "face_01.png": [
+    64,
+    64
+   ],
+   "face_02.png": [
+    64,
+    64
+   ],
+   "face_03.png": [
+    64,
+    64
+   ],
+   "face_04.png": [
+    64,
+    64
+   ],
+   "face_05.png": [
+    64,
+    64
+   ],
+   "face_06.png": [
+    64,
+    64
+   ],
+   "face_07.png": [
+    64,
+    64
+   ],
+   "face_08.png": [
+    64,
+    64
+   ],
+   "face_09.png": [
+    64,
+    64
+   ],
+   "face_10.png": [
+    62,
+    73
+   ],
+   "face_11.png": [
+    62,
+    73
+   ],
+   "face_12.png": [
+    62,
+    73
+   ],
+   "face_13.png": [
+    62,
+    73
+   ],
+   "face_14.png": [
+    62,
+    73
+   ],
+   "face_15.png": [
+    62,
+    73
+   ],
+   "face_16.png": [
+    64,
+    64
+   ],
+   "face_17.png": [
+    64,
+    64
+   ],
+   "face_18.png": [
+    64,
+    64
+   ],
+   "face_19.png": [
+    64,
+    64
+   ],
+   "face_20.png": [
+    64,
+    64
+   ],
+   "face_21.png": [
+    64,
+    64
+   ],
+   "face_22.png": [
+    64,
+    64
+   ],
+   "face_23.png": [
+    64,
+    64
+   ],
+   "face_24.png": [
+    64,
+    64
+   ],
+   "face_25.png": [
+    64,
+    64
+   ],
+   "face_26.png": [
+    64,
+    64
+   ],
+   "face_27.png": [
+    64,
+    64
+   ],
+   "face_28.png": [
+    64,
+    64
+   ],
+   "face_29.png": [
+    64,
+    64
+   ],
+   "face_30.png": [
+    64,
+    64
+   ],
+   "lbl_power_down.png": [
+    112,
+    24
+   ],
+   "lbl_power_up.png": [
+    90,
+    24
+   ],
+   "lbl_take.png": [
+    72,
+    24
+   ],
+   "lbl_scramble.png": [
+    76,
+    24
+   ],
+   "lbl_sp1.png": [
+    101,
+    24
+   ],
+   "lbl_sp2.png": [
+    113,
+    24
+   ],
+   "lbl_sp3.png": [
+    128,
+    24
+   ]
+  },
+  "coms": {
+   "1": {
+    "name": "Flower Girl Natasha",
+    "face": "face_01.png"
+   },
+   "2": {
+    "name": "Lumberjack Mick",
+    "face": "face_02.png"
+   },
+   "3": {
+    "name": "Quina",
+    "face": "face_03.png"
+   },
+   "4": {
+    "name": "Bogart the Gladiator",
+    "face": "face_04.png"
+   },
+   "5": {
+    "name": "Agnes",
+    "face": "face_05.png"
+   },
+   "6": {
+    "name": "Queen Brahne",
+    "face": "face_06.png"
+   },
+   "7": {
+    "name": "Puppeteer Mina",
+    "face": "face_07.png"
+   },
+   "8": {
+    "name": "Bartender Bill",
+    "face": "face_08.png"
+   },
+   "9": {
+    "name": "Akbar the Hunter",
+    "face": "face_09.png"
+   },
+   "10": {
+    "name": "Steiner",
+    "face": "face_10.png"
+   },
+   "11": {
+    "name": "Jill",
+    "face": "face_11.png"
+   },
+   "12": {
+    "name": "Stiltzkin",
+    "face": "face_12.png"
+   },
+   "13": {
+    "name": "Fabius the Pirate",
+    "face": "face_13.png"
+   },
+   "14": {
+    "name": "Amarant",
+    "face": "face_14.png"
+   },
+   "15": {
+    "name": "Gardener Broidy",
+    "face": "face_15.png"
+   },
+   "16": {
+    "name": "Lani",
+    "face": "face_16.png"
+   },
+   "17": {
+    "name": "Eiko",
+    "face": "face_17.png"
+   },
+   "18": {
+    "name": "Zidane",
+    "face": "face_18.png"
+   },
+   "19": {
+    "name": "Chef Pierre",
+    "face": "face_19.png"
+   },
+   "20": {
+    "name": "Freya",
+    "face": "face_20.png"
+   },
+   "21": {
+    "name": "Revolutionary Carol",
+    "face": "face_21.png"
+   },
+   "22": {
+    "name": "Vivi",
+    "face": "face_22.png"
+   },
+   "23": {
+    "name": "Trade King Gohn",
+    "face": "face_23.png"
+   },
+   "24": {
+    "name": "Kuja",
+    "face": "face_24.png"
+   },
+   "25": {
+    "name": "Garnet",
+    "face": "face_25.png"
+   },
+   "26": {
+    "name": "Artania",
+    "face": "face_26.png"
+   },
+   "27": {
+    "name": "Beatrix",
+    "face": "face_27.png"
+   },
+   "28": {
+    "name": "Doctor Tot",
+    "face": "face_28.png"
+   },
+   "29": {
+    "name": "Pilot Erin",
+    "face": "face_29.png"
+   },
+   "30": {
+    "name": "Regent Cid",
+    "face": "face_30.png"
+   }
+  },
+  "labels": {
+   "power_down": "lbl_power_down.png",
+   "power_up": "lbl_power_up.png",
+   "take": "lbl_take.png",
+   "scramble": "lbl_scramble.png",
+   "sp1": "lbl_sp1.png",
+   "sp2": "lbl_sp2.png",
+   "sp3": "lbl_sp3.png"
+  }
+ },
+ "about": "Tetra Master board art + layout, baked by tools/tm_boardart_bake.py from the PC client's gW*.dat packs",
+ "tabs_caption": [
+  "VS. Rating",
+  "Top 30",
+  "Best Rookies",
+  "Grand Total",
+  "Weekly Total",
+  "This Week",
+  "Auction"
+ ],
+ "titles": [
+  "VS. Rating",
+  "Top 30",
+  "Best Rookies",
+  "Grand Total",
+  "Weekly Total",
+  "This Week So Far",
+  "Auction"
+ ],
+ "strings": {
+  "rank": "Rank",
+  "last_week": "Last Week",
+  "player": "Player Name",
+  "vs_rating": "VS. Rating",
+  "prize_money": "Prize Money",
+  "no_info": "No rankings information.",
+  "hidden": "-------",
+  "cards": "Cards",
+  "high_bid": "High Bid",
+  "bidder": "Bidder",
+  "time_left": "Time Left",
+  "d": "d",
+  "h": "h",
+  "opening": "Opening Bid",
+  "bands": [
+   "All Cards",
+   "Cheap Cards",
+   "Affordable Cards",
+   "Expensive Cards",
+   "Exorbitant Cards"
+  ],
+  "games": "Games",
+  "seller": "Seller",
+  "sold_for": "Sold For",
+  "winner": "Winner",
+  "ended": "Ended",
+  "sold": "Recently Sold",
+  "live_note": "Live standings, not yet published.",
+  "no_cards": "No cards are up for auction.",
+  "no_sales": "No recent sales."
+ },
+ "ranks": [
+  "rank_1.png",
+  "rank_2.png",
+  "rank_3.png"
+ ],
+ "layers": {
+  "backdrop": "backdrop.png",
+  "panel": "panel.png",
+  "side": "side.png",
+  "header": "header.png",
+  "sep": "sep.png",
+  "arrow": "arrow.png",
+  "arrow_hi": "arrow_hi.png",
+  "tab": {
+   "s0": "tab_s0.png",
+   "s1": "tab_s1.png",
+   "s3": "tab_s3.png"
+  }
+ },
+ "fonts": {
+  "title": "tm-title.ttf",
+  "text": "tm-text.ttf",
+  "bold": "tm-text-bold.ttf"
+ }
+}

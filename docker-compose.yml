@@ -1,0 +1,94 @@
+# Tetra Master for the OpenLobby core. This file is an OVERRIDE, not a stack
+# of its own: the title runs inside the core's login and authsess processes,
+# so it is applied on top of OpenLobby's compose file, in OpenLobby's project.
+#
+# With both repositories checked out side by side, from this directory:
+#
+#   docker compose --project-directory ../openlobby \
+#       -f ../openlobby/docker-compose.yml -f docker-compose.yml up -d --build
+#
+# (put that in a shell alias or use COMPOSE_FILE; see README.md). It replaces
+# the core's login and authsess images with this one (the core plus the
+# title), and adds the weekly ranking job and, optionally, the live board.
+# Everything else - ports, volumes, the other services - is OpenLobby's.
+#
+# Before the first start: `python tools/tmdata_build.py --client <your
+# Tetra Master install>` (the client's parameter tables; see README.md).
+
+services:
+  # login builds the title image; authsess consumes it. Exactly one builder,
+  # so parallel builds cannot race on the tag.
+  login:
+    image: crystalmaster:latest
+    build:
+      context: ../crystalmaster
+      args:
+        OPENLOBBY_IMAGE: openlobby:latest
+    pull_policy: build
+    environment:
+      POL_TITLES: tmtitle
+      # the address a Tetra Master client dials for its zones; empty = the
+      # core's POL_ADVERTISE
+      POL_TM_ZONE_HOST: "${POL_TM_ZONE_HOST:-}"
+      # an event window (unix seconds); -1/-1 = no event, the default
+      POL_TM_EVENT_START: "${POL_TM_EVENT_START:--1}"
+      POL_TM_EVENT_END: "${POL_TM_EVENT_END:--1}"
+
+  authsess:
+    image: crystalmaster:latest
+    pull_policy: never
+    environment:
+      POL_TITLES: tmtitle
+      POL_TM_ZONE_HOST: "${POL_TM_ZONE_HOST:-}"
+      POL_TM_EVENT_START: "${POL_TM_EVENT_START:--1}"
+      POL_TM_EVENT_END: "${POL_TM_EVENT_END:--1}"
+
+  # THE WEEKLY TALLY. Tetra Master's ranking lists are rebuilt once a week
+  # (Sunday 00:05 UTC, as the original service did), out of band: the row
+  # count is promised on the auth band and the bytes served on the lobby band
+  # seconds later, so a rebuild between the two would hand the client one
+  # length and another file. tools/tmrank_job.py sleeps until the next
+  # Sunday, publishes, and sleeps again. TM_RANK_AT=now publishes at start
+  # too (a fresh server, or after restoring data).
+  tmrank:
+    image: crystalmaster:latest
+    pull_policy: never
+    restart: unless-stopped
+    entrypoint: ["python", "tools/tmrank_job.py"]
+    environment:
+      POL_DATA_DIR: /data
+      POL_RESOURCE_DIR: /data/resources
+      POL_ACCOUNTS_DB: /data/accounts.db
+      POL_TM_ROSTER_FILE: /data/tm-roster.json
+      TM_RANK_AT: "${TM_RANK_AT:-}"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - pol-data:/data
+      - pol-logs:/logs
+
+  # Optional: the live web board (standings, auctions, matches in progress),
+  # drawn with art baked from your own client (tools/tm_boardart_bake.py).
+  #   docker compose ... --profile board up -d
+  board:
+    image: crystalmaster:latest
+    pull_policy: never
+    restart: unless-stopped
+    profiles: ["board"]
+    entrypoint: ["python", "polboards.py", "--bind", "0.0.0.0",
+                 "--tm-port", "8793"]
+    environment:
+      POL_ACCOUNTS_DB: /data/accounts.db
+      POL_DATA_DIR: /data
+      POL_BOARDS_STATE_DIR: /state
+      POL_BOARDS_TM_URL: "${POL_BOARDS_TM_URL:-}"
+      POL_BOARDS_TM_DISCORD_WEBHOOK: "${POL_BOARDS_TM_DISCORD_WEBHOOK:-}"
+      POL_BOARDS_TM_AUCTION_DISCORD_WEBHOOK: "${POL_BOARDS_TM_AUCTION_DISCORD_WEBHOOK:-}"
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "127.0.0.1:8793:8793"
+    volumes:
+      - pol-data:/data:ro
+      - tm-board-state:/state
+
+volumes:
+  tm-board-state:
