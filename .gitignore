@@ -7,5 +7,4 @@ services/boardart/tm/.staged-art
 __pycache__/
 *.pyc
 scrub-report.txt
-services/tmdata/card_names_en.txt
 .env

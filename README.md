@@ -50,7 +50,9 @@ Step 1 writes `services/tmdata/`: `CardPri.BIN` (the sell-price ladder),
 (the VS. COM opponents), `PackPrm.BIN` (the packs), and, from an English
 install, `card_names_en.txt` (the card names, from the table's own string
 pool). The files in your install are LZSS-compressed; the tool decodes them
-with the client's own scheme. Nothing here ships with the repository.
+with the client's own scheme. Only the card-name list ships with the
+repository (so a Japanese install still gets English card names on the
+board and in notices); the tables do not.
 
 Step 2 rebuilds the core's `login` and `authsess` containers from the
 `crystalmaster` image (the core image plus this title) and starts the
