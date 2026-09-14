@@ -26,9 +26,12 @@ import struct
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-_TOOLS = os.path.normpath(os.path.join(HERE, os.pardir, "tools"))
-if _TOOLS not in sys.path:
-    sys.path.append(_TOOLS)          # append, not insert: services/ stays first
+# the tools directory: beside services/ in a checkout, under the code in the
+# image (the Dockerfile copies tools/ to /app/tools/)
+for _TOOLS in (os.path.normpath(os.path.join(HERE, os.pardir, "tools")),
+               os.path.join(HERE, "tools")):
+    if os.path.isdir(_TOOLS) and _TOOLS not in sys.path:
+        sys.path.append(_TOOLS)      # append, not insert: services/ stays first
 
 import tmrank                                                    # noqa: E402
 import tmroom                                                    # noqa: E402

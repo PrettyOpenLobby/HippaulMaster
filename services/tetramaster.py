@@ -14111,8 +14111,8 @@ class TMState(Enum):
 
 def describe():
     """One-liner for the harness log."""
-    return ("TM0 text protocol: TeachDV opener answered; match/board set still "
-            "capture-only. RE source: decrypted TMaster.pex (base 0x00280000).")
+    return ("TM0 text protocol: zones, rooms, tables, VS. COM and player matches, "
+            "trade, shop, auction, rankings, events.")
 
 
 def describe_line(body):
