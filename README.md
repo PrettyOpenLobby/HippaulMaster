@@ -61,6 +61,18 @@ project; put it in a shell alias, or set `COMPOSE_FILE` and
 `COMPOSE_PROJECT_NAME` in your environment. To take the title out again,
 run the core's own `docker compose up -d` from its checkout.
 
+### Without building
+
+The image is published to `ghcr.io/prettyopenlobby/crystalmaster` on every push,
+layered on the published OpenLobby image. Apply the pull-only overrides of
+both repositories after their compose files, from this directory:
+
+```
+docker compose --project-directory ../openlobby     -f ../openlobby/docker-compose.yml -f ../openlobby/docker-compose.ghcr.yml     -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+```
+
+`CRYSTALMASTER_TAG` and `OPENLOBBY_TAG` pick the versions (default `latest`).
+
 ## Pointing a client at it
 
 Everything client-side is the core's: DNS or hosts redirection, the CA, an
