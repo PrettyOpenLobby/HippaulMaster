@@ -4579,6 +4579,22 @@ class TetraMaster(titles.Title):
     def profile_fields(self, cid, member_id):
         return profile_fields(cid, member_id)
 
+    def polpro_profile(self, cid, name, member_id):
+        # THE `<PO>` POPUP'S THREE SLOTS: Card Level (16), Title (24) and
+        # Average Rank (9), from the ONE producer the Viewer's content profile
+        # also reads, so the two screens cannot disagree about a player. The
+        # slot numbers are the `.pib` schema's generic tail (see the core's
+        # `<PG>` handler for why only slots 9 onward transfer).
+        game = profile_fields(cid, member_id)
+        fields = {}
+        if _TM_CARD_LEVEL in game:
+            fields[16] = int(game[_TM_CARD_LEVEL])
+        if _TM_TITLE in game:
+            fields[24] = int(game[_TM_TITLE])
+        if _TM_AVG_RANK in game:
+            fields[9] = str(game[_TM_AVG_RANK])
+        return fields, name, member_id
+
     def character_name(self, cid):
         return _pool_character_name(cid)
 
