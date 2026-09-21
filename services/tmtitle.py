@@ -43,6 +43,7 @@ _CORE_NAMES = (
     "_resource_file", "_resource_read_file", "_resource_stored", "_fetch_subject",
     "_peer_is_ps2", "_mail_mint", "_member_primary_handle",
     "_session_handle_id", "_self_ip", "_member_display_name",
+    "_advertise_configured",
 )
 
 
@@ -3613,6 +3614,19 @@ def _lobby_counts_live(path, data, subject=0):
         return data
 
 
+def _client_host():
+    """The address to write into a zone row for THE CLIENT BEING SERVED.
+
+    A core that exports `_advertise_configured` also makes `_self_ip()` answer
+    per client: a console on the LAN gets the LAN address it reached us on, not
+    the one box-wide POL_ADVERTISE, which it may not be able to route to. An
+    older core has neither, and there `_self_ip()` ignores POL_ADVERTISE
+    altogether, so the environment has to come first exactly as before."""
+    if _advertise_configured is not None:
+        return _self_ip() if _advertise_configured() else ""
+    return (os.environ.get("POL_ADVERTISE") or "").strip()
+
+
 def _zone_host_live(path, data):
     """`b/g/ZL`'s dial target is THIS server, whatever the fixture says.
 
@@ -3637,7 +3651,7 @@ def _zone_host_live(path, data):
     # and dropped back to the title screen (observed live, 2026-09-09). Exactly the
     # failure this function was written to prevent, one address further along.
     host = (os.environ.get("POL_TM_ZONE_HOST")
-            or os.environ.get("POL_ADVERTISE") or _self_ip())
+            or _client_host() or _self_ip())
     try:
         out, replaced = tmroom.patch_zone_hosts(data, host)
     except ValueError as exc:
@@ -4021,8 +4035,7 @@ def _tm_template_blob(path):
 #: POL_TM_ZONE_HOST overrides; unset falls back to POL_ADVERTISE; neither set
 #: leaves the file's own bytes alone.
 def _zl_with_live_host(data):
-    host = (os.environ.get("POL_TM_ZONE_HOST")
-            or os.environ.get("POL_ADVERTISE") or "").strip()
+    host = (os.environ.get("POL_TM_ZONE_HOST") or _client_host()).strip()
     if not host or len(data) < 0x48:
         return data
     HDR, REC, COUNT_OFF, F_CHANNEL, F_BYTE = 0x48, 64, 0x40, 0x2C, 0x3C
