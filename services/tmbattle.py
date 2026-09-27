@@ -98,6 +98,41 @@ _NEIGHBOURS_16_MEASURED = (
     (10, 11, 15, 16, 16, 16, 13, 9), (11, 16, 16, 16, 16, 16, 14, 10),
 )
 
+
+#: WARNING: THE ROTATING BLOCK'S RAY WRAPS AROUND THE BOARD. The arrow engine walks
+#: the table above (0xD37F1, `[0x51C3748 + (kind*25 + tile)*8 + dir]`, rva
+#: 0x233748), but the ray walks a SECOND table 400 bytes further on: 0xD29A5
+#: (and the beam sprite at 0xD2861, and the clean-up walk at 0xD2CD3) read
+#: `[0x51C38D8 + ...]`, rva **0x2338D8** -- the same geometry taken modulo the
+#: board, so the top row's NW is the bottom row, and so on. There is no "off
+#: the board" in it at all. The server fired a top-row block NW "at tile None"
+#: on 2026-09-26 while the client hit tile 13, took the COM's card there, and
+#: then waited for ever on the COM's next placement for a battle vs 13 that
+#: the server (still holding 13 for the COM) never sent.
+def _build_wrap_neighbours(tiles):
+    w, h = TILE_COUNTS[tiles]
+    out = []
+    for t in range(tiles):
+        r, c = divmod(t, w)
+        out.append(tuple(((r + dr) % h) * w + (c + dc) % w
+                         for dr, dc in DIRECTIONS))
+    return tuple(out)
+
+
+_WRAP_NEIGHBOURS = {n: _build_wrap_neighbours(n) for n in TILE_COUNTS}
+
+#: rva 0x2338D8, dumped verbatim for the 16-tile board (kind 0).
+_WRAP_NEIGHBOURS_16_MEASURED = (
+    (12, 13, 1, 5, 4, 7, 3, 15), (13, 14, 2, 6, 5, 4, 0, 12),
+    (14, 15, 3, 7, 6, 5, 1, 13), (15, 12, 0, 4, 7, 6, 2, 14),
+    (0, 1, 5, 9, 8, 11, 7, 3), (1, 2, 6, 10, 9, 8, 4, 0),
+    (2, 3, 7, 11, 10, 9, 5, 1), (3, 0, 4, 8, 11, 10, 6, 2),
+    (4, 5, 9, 13, 12, 15, 11, 7), (5, 6, 10, 14, 13, 12, 8, 4),
+    (6, 7, 11, 15, 14, 13, 9, 5), (7, 4, 8, 12, 15, 14, 10, 6),
+    (8, 9, 13, 1, 0, 3, 15, 11), (9, 10, 14, 2, 1, 0, 12, 8),
+    (10, 11, 15, 3, 2, 1, 13, 9), (11, 8, 12, 0, 3, 2, 14, 10),
+)
+
 # --------------------------------------------------------------------------
 # 2. THE CARD ROW
 # --------------------------------------------------------------------------
@@ -1323,9 +1358,37 @@ def rotating_phase(card, advance=0):
     return ((mask.bit_length() - 1) + int(advance)) & 7
 
 
-def ray_target(tiles, tile, phase):
-    """The tile a rotating block at `tile` fires at. 0xD299C, one step."""
-    return _NEIGHBOURS[tiles][int(tile)][(int(phase) - 4) & 7]
+def ray_target(tiles, tile, phase, wrap=False, steps=1):
+    """The tile a rotating block at `tile` fires at, `steps` tiles out.
+
+    0xD2971..0xD29AC walks `[obj+0x16C]` steps from the block, each one through
+    the neighbour table in direction `(phase - 4) & 7`. `wrap=True` is the
+    client's own table for that walk (rva 0x2338D8, `_WRAP_NEIGHBOURS`);
+    `wrap=False` is the pre-2026-09-26 model, which stops at the edge.
+    """
+    table = (_WRAP_NEIGHBOURS if wrap else _NEIGHBOURS)[tiles]
+    d = (int(phase) - 4) & 7
+    t = int(tile)
+    for _ in range(max(1, int(steps))):
+        t = table[t][d]
+        if t is None:
+            return None
+    return t
+
+
+def ray_reach(a_raw, a_mult, players):
+    """How many tiles the beam walks out. 0xD2BE7..0xD2C2C (and 0xD2DE7).
+
+    State 0x20 fires at step `[obj+0x16C]` = 1, 2, ... and stops when the step
+    equals the PLAYER COUNT (byte 0x52464C5) or `v / 30 + 1`, where `v` is the
+    attacker's `card+0x8E` word. A battle against a block never reaches the
+    count-down (state 9 goes straight to 0x1E, 0xCF6F5, or via 0xA, which
+    multiplies +0x8E by the ability multiplier at 0xCF973 and then picks 0x1E
+    at 0xCF9BD), so `v` is still what 0xCF1EF stored from `@BattleData /A=`
+    occ 1 -- `a_raw` -- times `a_mult`.
+    """
+    v = max(0, int(a_raw)) * max(1, int(a_mult))
+    return max(1, min(v // 30 + 1, int(players)))
 
 
 def is_rotating(card):
@@ -1334,48 +1397,55 @@ def is_rotating(card):
 
 
 def apply_rotating(board, tiles, target, actor, players=DEFAULT_PLAYERS,
-                   guard=16, advance=0):
+                   guard=16, advance=0, wrap=False, reach=1):
     """Fire a battled rotating block's ray. Returns the tiles it converted.
 
-    `target` is the block that was fought. Chains through any rotating block
-    the ray lands on (0xD2B97 marks it 4 and 0x21 loops back to 0x1E), with a
-    guard because a pair of blocks facing each other would otherwise ring for
-    ever -- the client's own mark test stops it, and so does `seen` here.
+    `target` is the block that was fought. Each round (state 0x1E) fires every
+    block in it at steps 1..`reach` (state 0x20, one step per pass), and any
+    untouched rotating block a step lands on is marked 4 (0xD2B97) and fires in
+    the NEXT round (0x21 -> 0x1E). A block already fought or fired is marks 2/3
+    and is not relayed (0xD2B87 `and dl, 0xfe / cmp dl, 2`); `seen` stands in
+    for that here, and `guard` bounds it.
 
     The block itself is deliberately left alone: no capture, no consumption.
+    `wrap=False, reach=1` is the pre-2026-09-26 model (one tile, stops at the
+    edge).
     """
-    hit, seen, queue = [], set(), [int(target)]
-    while queue and len(seen) < guard:
-        t = queue.pop(0)
-        if t in seen:
-            continue
-        seen.add(t)
-        blk = board.get(t)
-        if not is_rotating(blk):
-            continue
-        phase = rotating_phase(blk, advance)
-        if phase is None:
-            continue
-        u = ray_target(tiles, t, phase)
-        if u is None:
-            continue
-        occ = board.get(u)
-        # 0xD2A3B / 0xD2A47 -- the two skips. An empty tile, a block, a special
-        # or a card already the actor's is left alone.
-        skipped = (occ is None or occ.owner is None
-                   or int(occ.owner) >= players
-                   or int(occ.owner) == int(actor))
-        if skipped:
-            # KEY: AND THE CHAIN IS ON THE SKIP PATH, not the capture one. Both
-            # skips `jmp 0xD2B7C`, which is where the id is tested and 0xD2B97
-            # writes mark 4. So a ray that lands on a NEUTRAL rotating block
-            # sets that one firing too -- an untouched block relays the beam,
-            # a captured card ends it.
-            if is_rotating(occ):
-                queue.append(u)
-            continue
-        occ.owner = int(actor)             # 0xD2B22
-        hit.append(u)
+    hit, seen = [], set()
+    rnd_blocks = [int(target)]
+    while rnd_blocks and len(seen) < guard:
+        nxt = []
+        fire = []
+        for t in rnd_blocks:
+            if t in seen:
+                continue
+            seen.add(t)
+            blk = board.get(t)
+            if not is_rotating(blk):
+                continue
+            phase = rotating_phase(blk, advance)
+            if phase is not None:
+                fire.append((t, phase))
+        for step in range(1, max(1, int(reach)) + 1):
+            for t, phase in fire:
+                u = ray_target(tiles, t, phase, wrap=wrap, steps=step)
+                if u is None:
+                    continue
+                occ = board.get(u)
+                # 0xD2A3B / 0xD2A47 -- the two skips. An empty tile, a block, a
+                # special or a card already the actor's is left alone.
+                skipped = (occ is None or occ.owner is None
+                           or int(occ.owner) >= players
+                           or int(occ.owner) == int(actor))
+                if skipped:
+                    # THE CHAIN IS ON THE SKIP PATH: 0xD2B7C tests the id and
+                    # 0xD2B97 marks an untouched block 4, so it fires next round.
+                    if is_rotating(occ) and u not in seen and u not in nxt:
+                        nxt.append(u)
+                    continue
+                occ.owner = int(actor)             # 0xD2B22
+                hit.append(u)
+        rnd_blocks = nxt
     return hit
 
 
@@ -1708,6 +1778,34 @@ def selftest(say=print):
     # ...and two blocks facing each other must terminate rather than ring.
     _b4 = {5: object_card(9), 9: object_card(13)}     # 9 fires N, back at 5
     apply_rotating(_b4, 16, 5, 0, players=2)
+
+    # WARNING: THE RAY WRAPS (rva 0x2338D8) -- the 2026-09-26 freeze. Against the
+    # shipped table first, so a drifted derivation cannot pass itself.
+    for t in range(16):
+        if _WRAP_NEIGHBOURS[16][t] != _WRAP_NEIGHBOURS_16_MEASURED[t]:
+            say("FAIL: wrap row %d %r != TM.dll rva 0x2338D8 %r"
+                % (t, _WRAP_NEIGHBOURS[16][t], _WRAP_NEIGHBOURS_16_MEASURED[t]))
+            ok = False
+            break
+    # Tile 2, phase 3, fires NW: off the board without wrap, tile 13 with it.
+    if ray_target(16, 2, 3) is not None or ray_target(16, 2, 3, wrap=True) != 13:
+        say("FAIL: tile 2 phase 3 must fire NW at None (wrap off) / 13 (on)")
+        ok = False
+    _bw = {2: object_card(13), 13: _c(0xFF, 1), 8: _c(0xFF, 1)}
+    if apply_rotating(_bw, 16, 2, 0, players=2, advance=7) != [] \
+            or apply_rotating(_bw, 16, 2, 0, players=2, advance=7,
+                              wrap=True) != [13] or _bw[8].owner != 1:
+        say("FAIL: wrap off converts nothing; wrap on, reach 1 converts 13 only")
+        ok = False
+    _bw = {2: object_card(13), 13: _c(0xFF, 1), 8: _c(0xFF, 1)}
+    if apply_rotating(_bw, 16, 2, 0, players=2, advance=7, wrap=True,
+                      reach=ray_reach(32, 1, 2)) != [13, 8]:
+        say("FAIL: a_raw 32 walks two steps (32 // 30 + 1) and takes 13 then 8")
+        ok = False
+    if [ray_reach(29, 1, 2), ray_reach(30, 1, 2), ray_reach(250, 5, 2),
+            ray_reach(60, 1, 4), ray_reach(20, 2, 3)] != [1, 2, 2, 3, 2]:
+        say("FAIL: reach = min(raw * mult // 30 + 1, players)")
+        ok = False
 
     # 8. WHAT AN OBJECT IS ON THE BOARD.
     if object_card(3) is not None or object_card(0) is not None:
