@@ -843,6 +843,38 @@ def _auction_sweep(now=None):
                         f"held, not dropped")
 
 
+def _auction_take_listed_card(member, ii):
+    """Remove the card a `<ER>` lists from the seller's stored collection.
+
+    `ii` is the 16-value `<II>`; its card is `tmauction.card_row_from_ii` =
+    [id, atk, type, pdef, mdef, power, arrows, flag]. The stored row's 8th value
+    is the deck slot, so the match is on the first SEVEN values, then on the
+    first copy of the id with the same four stats, then on the id alone (a
+    collection that drifted from the client still gives up a copy). Returns
+    the removed row, or None when the member holds no copy at all.
+    """
+    want = tmauction.card_row_from_ii(ii)
+    data = tetramaster._collection_load(member)
+    have = data.get("cards")
+    if not isinstance(have, list) or not have:
+        return None
+    tests = (lambda c: list(c)[:7] == want[:7],
+             lambda c: list(c)[:5] == want[:5],
+             lambda c: int(c[0]) == int(want[0]))
+    idx = None
+    for t in tests:
+        idx = next((i for i, c in enumerate(have) if c and t(c)), None)
+        if idx is not None:
+            break
+    if idx is None:
+        return None
+    gone = list(have.pop(idx))
+    tetramaster._collection_store(member, data)
+    log("authserv", f"  auction: member {member} collection -= card {gone} "
+                    f"(listed; {len(have)} left)")
+    return gone
+
+
 def _tm_auction_reply(payload):
     """Class-A `<ER>` (list a card) and `<SI>`+`<IO>` (my sale list).
 
@@ -1124,6 +1156,22 @@ def _tm_auction_reply(payload):
             log("authserv", f"  auction: <ER> fields unparsable ({e}) -- "
                             f"declining, the static <EF> answers")
             return None, False
+        # WARNING: THE LISTED CARD LEAVES THE SELLER'S COLLECTION HERE (2026-09-25).
+        # It never did: a SOLD auction gave the buyer the card at Check Out
+        # while the seller kept theirs, so every sale duplicated a card
+        # (measured: 9 cards, list one, self-bid, settle, collect -> 10). The
+        # listing now holds the card; settlement already hands it to the
+        # winner (cards-B) or back to the seller (cards-A, "Returned Card"). A
+        # seller who does not own the card is refused with <EF>.
+        # POL_TM_AUCTION_TAKE_CARD=0 restores the old behaviour.
+        taken = None
+        if os.environ.get("POL_TM_AUCTION_TAKE_CARD", "1") == "1"                 and member is not None:
+            taken = _auction_take_listed_card(member, [int(x) for x in ii])
+            if taken is None:
+                log("authserv", f"  auction: member {member} listed card "
+                                f"{ii[0]} that is not in their collection -- "
+                                f"declining, the static <EF> answers")
+                return None, False
         blob = rows + rec
         try:
             _write_resource(_auction_store_file(), blob)
@@ -1134,6 +1182,8 @@ def _tm_auction_reply(payload):
             # to <EF> instead, which is honest and un-hangs the screen.
             log("authserv", f"  auction: cannot store the listing ({e}) -- "
                             f"declining so the client gets <EF>, not a lie")
+            if taken is not None:
+                tetramaster._collection_add_cards(member, [taken])
             return None, False
         d = tmauction.read_record(rec)
         log("authserv", f"  auction: member {member} listed card {d['ii'][0]} "
