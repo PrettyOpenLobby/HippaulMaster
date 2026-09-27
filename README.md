@@ -47,7 +47,8 @@ docker compose --project-directory ../openlobby \
 
 Step 1 writes `services/tmdata/`: `CardPri.BIN` (the sell-price ladder),
 `CardPrm.BIN` (one row per card: attack, type, defences, level), `CoPrm.BIN`
-(the VS. COM opponents), `PackPrm.BIN` (the packs), and, from an English
+(the title ladder), `PackPrm.BIN` (the packs), `PlPrm.BIN` (each VS. COM
+opponent's average rank and deck), and, from an English
 install, `card_names_en.txt` (the card names, from the table's own string
 pool). The files in your install are LZSS-compressed; the tool decodes them
 with the client's own scheme. Only the card-name list ships with the
