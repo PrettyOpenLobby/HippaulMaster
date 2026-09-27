@@ -429,6 +429,28 @@ def next_update(now=None, period=7 * 86400, phase=_WEEK_PHASE):
     return last + period
 
 
+def week_start(now=None):
+    """The first second of the week in progress (Sunday 00:00 UTC): the week
+    the NEXT publish tallies, so `_eligible`'s `since` for a live preview."""
+    return next_update(now) - 7 * 86400
+
+
+def week_games_of(blk, now=None):
+    """Games a `rank` block played in the week in progress.
+
+    `week_games` counts from `week_of` (a `week_start` stamp, written by
+    `tetramaster._bump_result_stats` from 2026-09-26); a stamp from an older
+    week means none yet. None when it cannot be told: a block that played
+    this week but before the counter existed."""
+    blk = blk if isinstance(blk, dict) else {}
+    since = week_start(now)
+    if blk.get("week_of") is not None:
+        if _int_or_zero(blk.get("week_of")) != since:
+            return 0
+        return max(0, _int_or_zero(blk.get("week_games")))
+    return None if _int_or_zero(blk.get("last_played")) >= since else 0
+
+
 # --- where a generated list lives -------------------------------------------
 #
 # NOT in the per-member resource store. `responders._resource_file` keys `U/g/`
@@ -705,7 +727,27 @@ RATING_SPAN = 300
 def rating_of(blk):
     """The VS. Rating (x100) a `rank` block earns -- ONE formula, used by the
     result path, the save writer and `stats_of`, so no two surfaces can
-    disagree. Blocks from before `tiles_total` was kept assume 16-tile boards."""
+    disagree.
+
+    From 2026-09-27 it is the block's Elo (`elo_of`) on the
+    client's 1.00..4.00 scale: winning moves it, weighted by who you beat. A
+    block with no `elo` yet reads its board share (`board_rating_of`), which
+    is exactly what its Elo is seeded from, so the switch moves no one until
+    they play. `POL_TM_RATING_SCALE=board` (or `legacy`) turns Elo off."""
+    if not elo_enabled():
+        return board_rating_of(blk)
+    try:
+        if int(blk.get("games") or 0) <= 0:
+            return 0
+    except (TypeError, ValueError, AttributeError):
+        return 0
+    return elo_display(elo_of(blk))
+
+
+def board_rating_of(blk):
+    """The VS. Rating until 2026-09-27, and every Elo's seed: 1.00 + 3.00 x the
+    share of the board held over the career. Blocks from before `tiles_total`
+    was kept assume 16-tile boards."""
     try:
         games = int(blk.get("games") or 0)
         total = int(blk.get("score_total") or 0)
@@ -742,6 +784,106 @@ def tiled_games_of(blk):
         return max(0, _int_or_zero(stored))
     tiles = max(0, _int_or_zero(blk.get("tiles_total")))
     return min(max(0, _int_or_zero(blk.get("games"))), tiles // 16)
+
+
+# --- the Elo VS. Rating (2026-09-27) ----------------------------------------
+#
+# OURS, not SE's (theirs is unrecoverable). Board share rewarded holding tiles
+# against anyone, so beating an easy COM over and over was the surest climb,
+# and a narrow loss scored nearly what a win did. Elo
+# scores the RESULT against the opponent's strength.
+#
+# Kept internally in classic Elo points and shown on the client's scale: 1500
+# is 2.50, and every 4 points is 0.01, so 900..2100 spans 1.00..4.00 (the
+# display clamps; the points do not). A COM has a fixed rating by the rung of
+# the deck the server dealt it (tetramaster._com_elo), 1.50..2.75 by default.
+
+ELO_ANCHOR = 1500.0
+ELO_ANCHOR_SHOWN = 250
+ELO_PER_POINT = 4.0
+
+#: 2026-09-27 00:00 UTC, the first second after the week board share tallied
+#: last: a result before it never moves an Elo.
+ELO_FROM_DEFAULT = 1790467200
+
+
+def elo_enabled():
+    return (os.environ.get("POL_TM_RATING_SCALE") or "elo").strip().lower() == "elo"
+
+
+def elo_from():
+    try:
+        return int(os.environ.get("POL_TM_ELO_FROM") or ELO_FROM_DEFAULT)
+    except ValueError:
+        return ELO_FROM_DEFAULT
+
+
+def elo_display(elo):
+    """Elo points -> VS. Rating x100, clamped to the client's 1.00..4.00."""
+    shown = ELO_ANCHOR_SHOWN + (float(elo) - ELO_ANCHOR) / ELO_PER_POINT
+    return int(max(RATING_FLOOR, min(RATING_FLOOR + RATING_SPAN, round(shown))))
+
+
+def elo_of_display(shown):
+    """VS. Rating x100 -> Elo points: `elo_display`'s inverse, for seeds."""
+    return ELO_ANCHOR + (float(shown) - ELO_ANCHOR_SHOWN) * ELO_PER_POINT
+
+
+def elo_of(blk):
+    """A block's Elo: the stored `elo`, else seeded from its board share (so
+    its shown rating does not move), else the anchor for a new player."""
+    blk = blk if isinstance(blk, dict) else {}
+    try:
+        if blk.get("elo") is not None:
+            return float(blk["elo"])
+    except (TypeError, ValueError):
+        pass
+    board = board_rating_of(blk)
+    return elo_of_display(board) if board else ELO_ANCHOR
+
+
+def _env_float(name, default):
+    try:
+        return float(os.environ.get(name) or default)
+    except ValueError:
+        return float(default)
+
+
+def elo_k(elo_games):
+    """K for a player with `elo_games` rated results: larger while new, so a
+    fresh player (or a seed) finds their level quickly."""
+    if int(elo_games or 0) < int(_env_float("POL_TM_ELO_NEW_GAMES", 10)):
+        return _env_float("POL_TM_ELO_K_NEW", 48)
+    return _env_float("POL_TM_ELO_K", 32)
+
+
+def elo_expected(a, b):
+    return 1.0 / (1.0 + 10.0 ** ((float(b) - float(a)) / 400.0))
+
+
+def elo_match(ratings, scores, ks):
+    """New Elo per seat after one match.
+
+    `ratings`, `scores` and `ks` are per seat; a seat whose K is None (a COM)
+    is an opponent only and keeps its rating. Every pair of seats is a result
+    -- the higher final score wins it, equal scores draw -- and each seat's K
+    is split across its opponents, so a 4-player board moves a rating about as
+    far as a 2-player one. All from the PRE-match ratings."""
+    n = len(ratings)
+    out = list(ratings)
+    if n < 2:
+        return out
+    for i in range(n):
+        if ks[i] is None:
+            continue
+        delta = 0.0
+        for j in range(n):
+            if j == i:
+                continue
+            s = 1.0 if scores[i] > scores[j] else 0.5 if scores[i] == scores[j] else 0.0
+            delta += s - elo_expected(ratings[i], ratings[j])
+        out[i] = ratings[i] + ks[i] / (n - 1) * delta
+    return out
 
 
 def stats_of(collection):
@@ -977,6 +1119,40 @@ def selftest():
     check((st["games"], st["last_played"]) == (3, 1234),
           "stats_of must hand _eligible games and last_played")
     check(stats_of({})["last_played"] == 0, "never played = 0, not active")
+
+    # THE ELO VS. RATING (2026-09-27)
+    check(all(elo_display(elo_of_display(v)) == v for v in range(100, 401)),
+          "a seed must show exactly the board share it came from")
+    check(rating_of(cas) == board_rating_of(cas) == 228,
+          "the switch moves no one who has not played since")
+    check((elo_display(900), elo_display(1500), elo_display(2100), elo_display(9999))
+          == (100, 250, 400, 400), "900..2100 spans 1.00..4.00, clamped")
+    check(rating_of({"games": 0, "elo": 1800}) == 0, "no games, no rating")
+    check(rating_of({"games": 9, "elo": 1600.4}) == 275, "a stored elo is what shows")
+    check(elo_of({}) == ELO_ANCHOR, "a new player starts at 2.50")
+    a, b = elo_match([1500, 1500], [9, 7], [32, 32])
+    check(abs(a - 1516) < 1e-9 and abs(b - 1484) < 1e-9, "an even win is +K/2: %r" % ((a, b),))
+    a, b = elo_match([1500, 1500], [8, 8], [32, 32])
+    check((a, b) == (1500, 1500), "an even draw moves no one")
+    up, _ = elo_match([1400, 1600], [9, 7], [32, 32])
+    dn, _ = elo_match([1600, 1400], [9, 7], [32, 32])
+    check(up - 1400 > dn - 1600 > 0, "beating a stronger player gains more than a weaker one")
+    h, com = elo_match([1500, 1300], [9, 7], [32, None])
+    check(com == 1300 and 0 < h - 1500 < 16, "a COM keeps its rating; beating a weak one gains little")
+    four = elo_match([1500] * 4, [10, 8, 5, 2], [32] * 4)
+    check(abs(four[0] - 1516) < 1e-9 and abs(sum(four) - 6000) < 1e-9,
+          "4 seats: K is split across opponents, and the points are conserved")
+    check(elo_k(0) == 48 and elo_k(10) == 32, "K is larger for the first 10 rated games")
+    saved = os.environ.get("POL_TM_RATING_SCALE")
+    os.environ["POL_TM_RATING_SCALE"] = "board"
+    try:
+        check(rating_of({"games": 2, "score_total": 19, "elo": 2000}) == 278,
+              "POL_TM_RATING_SCALE=board ignores the elo")
+    finally:
+        if saved is None:
+            os.environ.pop("POL_TM_RATING_SCALE", None)
+        else:
+            os.environ["POL_TM_RATING_SCALE"] = saved
 
     hdr = build_rkdata({0: 12, 5: 12, 1: 30, 2: 10}, next_update(1787198400))
     check(len(hdr) == RKDATA_LEN, "the header is %d bytes, not %d" % (len(hdr), RKDATA_LEN))
