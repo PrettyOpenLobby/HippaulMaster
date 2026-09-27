@@ -2281,6 +2281,11 @@ MSG_AUCCARDS = 0x002100B2
 #: In authsess only (both @CvReq and @Pong are auth-band), so a module dict is
 #: safe. member_id -> pushes remaining.
 _EVENTSHOP_PENDING = {}
+#: Members standing in the PRIZE CENTER (their last door was `@CvReq=`). The
+#: shop scene's `@Buy=` means "exchange prize points for prize /No=" there, and
+#: "buy pack /No= for gold" behind `@ShReq=`; nothing else on the wire says
+#: which.
+_PRIZE_DOOR = set()
 
 
 def _eventshop_item_lines(member_id):
@@ -3251,7 +3256,14 @@ def _collection_store(member_id, data, sync_save=True):
 #: instead of as evidence about pack size.
 #:
 #: `POL_TM_COLLECTION_RECORD=acquire` restores the one-card behaviour.
-_ACQUIRED_PER_PACK = 5
+#:
+#: WARNING: AND "FIVE" WAS THE PAUPER'S PACK'S SIZE, NOT A PACK'S (2026-09-26). The
+#: screen check above was a Pauper's Pack, which deals 5, and the number went
+#: in as a constant. The Beginner's Pack (/No=1) deals TEN (PackPrm +0x09,
+#: pinned in `_selftest_packs`): a player bought one, the client showed ten,
+#: and `@Get=` kept the first five -- "ACQUIRED 5 of 10 offered". The whole pack
+#: is kept, whatever its size. `POL_TM_PACK_KEEP_MAX=5` restores the old cap.
+_ACQUIRED_PER_PACK = None
 
 
 def _record_on_grant():
@@ -3868,7 +3880,8 @@ def _collection_commit_offer(member_id):
               % member_id)
         _collection_store(member_id, data)
         return
-    kept = [list(c) for c in pack[:_ACQUIRED_PER_PACK]]
+    cap = _env_int("POL_TM_PACK_KEEP_MAX", 0) or _ACQUIRED_PER_PACK
+    kept = [list(c) for c in (pack[:cap] if cap else pack)]
     have = data.get("cards")
     data["cards"] = (have if isinstance(have, list) else []) + kept
     if _collection_store(member_id, data):
@@ -4044,6 +4057,8 @@ def _note_deck_slots(data, rows, sh=None):
             # every map entry naming that card (id + stats, else id).
             hit = [k for k, v in slots.items() if v and v[0] == card[0]
                    and list(v[1:6]) == card[1:6]]                 or [k for k, v in slots.items() if v and v[0] == card[0]]
+            # one row takes ONE copy out (identical copies are separate cards)
+            hit = hit[:1]
             for k in hit:
                 slots.pop(k, None)
             removed.append((card[0], hit))
@@ -4057,10 +4072,34 @@ def _note_deck_slots(data, rows, sh=None):
     # ADDS or MOVES: the card's previous entry (id + stats, else id) goes,
     # then the reported slot is set; a removal is a 255 row (above).
     decks = {s // 5 for s in placed}
+
+    # WARNING: IDENTICAL COPIES ARE DIFFERENT CARDS (2026-09-25):
+    # a member holding three identical #148s put all three in one deck and only
+    # the last stayed -- each placement "moved" the previous identical entry.
+    # A placement is a MOVE only while the member owns no more copies of that
+    # exact card than the map already places; otherwise it is another copy.
+    def _owned(v):
+        n = 0
+        for c in data.get("cards") or []:
+            try:
+                if (int(c[0]) == v[0] and [int(x) for x in c[1:5]] == list(v[1:5])
+                        and int(c[6]) == v[5]):
+                    n += 1
+            except (TypeError, ValueError, IndexError):
+                continue
+        return n
+
     for s, v in placed.items():
-        prev = [k for k, w in slots.items() if w and w[0] == v[0]
-                and list(w[1:6]) == v[1:6]] \
-            or [k for k, w in slots.items() if w and w[0] == v[0]]
+        same = [k for k, w in slots.items() if w and w[0] == v[0]
+                and list(w[1:6]) == v[1:6] and k != str(s)]
+        if same:
+            prev = same[:1] if len(same) >= max(1, _owned(v)) else []
+        else:
+            # same id, other stats: a card that changed (drift, an upgrade)
+            # is replaced -- but only an entry whose exact card the member no
+            # longer holds; same-id cards with other arrows are other cards
+            prev = [k for k, w in slots.items() if w and w[0] == v[0]
+                    and k != str(s) and not _owned(w)][:1]
         for k in prev:
             slots.pop(k, None)
         slots[str(s)] = v
@@ -6829,6 +6868,24 @@ def _table_rules_put(chan, index, fields):
               "lost on the next restart" % (index, exc))
 
 
+def _com_rules_of(chan, index):
+    """A VS. COM game's rules, as the player chose them on the COM screen.
+
+    WARNING: A COM GAME HAS NO LOBBY TABLE, SO `_table_rules_get` ALWAYS MISSED IT
+    (2026-09-26). The @ComGame= handler echoed the player's `/Rule=` back in
+    `/R=` -- the client's rules screen was right -- but the board deal looked
+    the rules up by (chan, index) = (None, push key), found nothing, and fell
+    through to `TET_DEFAULTS`: st=1 cb=1 ca=1. A player asked for all three
+    off (`/Rule=0|0|0|0|3|0|0|0`) and got a rotating block, two chance blocks
+    and two special tiles. The handler now keeps the rules on the `_COM_GAME`
+    entry (keyed by the same push key the deal uses) and this reads them.
+    `POL_TM_COM_BOARD_RULES=0` restores the defaults-only deal.
+    """
+    if chan or index is None or not _env_int("POL_TM_COM_BOARD_RULES", 1):
+        return None
+    return (_COM_GAME.get(index) or {}).get("rules") or None
+
+
 def _table_rules_get(chan, index):
     """A table's rule set: SHARED STATE FIRST, then this process's cache.
 
@@ -6860,6 +6917,48 @@ def _push_key(member_id):
         return int(member_id)
     except (TypeError, ValueError):
         return str(member_id)
+
+
+#: In-match commands whose queued copies belong to ONE game: the deal, turns,
+#: cards, battles, the result, the take list.
+_STALE_MATCH_CMDS = (8, 9, 10, 12, 13, 26)
+
+
+def _drop_stale_match_pushes(member_id, why):
+    """Forget in-match pushes still queued for this member from an EARLIER game.
+
+    WARNING: MEASURED 2026-09-25: a player whose client died
+    mid-turn left `@BattleData` x2 + `@TurnData` (turn 6) queued; they rode the
+    first reply of that member's NEXT VS. COM game on a new connection, the new
+    game opened on a stale turn and the COM's move never came. A new game
+    cannot own anything queued before it started. The E-body header text is
+    `CC 00 MM SS` (code, 0, command, turn). `POL_TM_DROP_STALE_PUSHES=0`
+    keeps them.
+    """
+    if member_id is None or not _env_int("POL_TM_DROP_STALE_PUSHES", 1):
+        return 0
+    key = _push_key(member_id)
+    dropped = 0
+    with _PUSH_LOCK:
+        keep = []
+        for entry in _PUSHES.get(key) or []:
+            try:
+                hdr = bytes.fromhex(bytes(entry[1][:8]).decode("ascii"))
+                stale = hdr[0] == IN_MATCH_CODE and hdr[2] in _STALE_MATCH_CMDS
+            except (ValueError, TypeError, IndexError, UnicodeDecodeError):
+                stale = False
+            if stale:
+                dropped += 1
+            else:
+                keep.append(entry)
+        if keep:
+            _PUSHES[key] = keep
+        else:
+            _PUSHES.pop(key, None)
+    if dropped:
+        _say("tm: member %s -- dropped %d in-match push(es) left over from an "
+             "earlier game (%s)" % (member_id, dropped, why))
+    return dropped
 
 
 def _queue_push(member_id, body, why="", after=0, peer=None, source=None):
@@ -9395,7 +9494,7 @@ def _match_objects(chan, index, n, fresh=False):
                 ", ".join("tile %d %s" % (t, tmbattle.object_kind(c))
                           for t, c in enumerate(codes) if c) or "none"))
         return codes
-    fields = _table_rules_get(chan, index) or {}
+    fields = _table_rules_get(chan, index) or _com_rules_of(chan, index) or {}
 
     def _on(k):
         """One rule byte, table first then the client's own defaults."""
@@ -9515,6 +9614,8 @@ def _chance_after_battle(chan, index, n, actor, target, board):
                 else -tmbattle.POWER_STEP))
     elif eff == "take":
         _who = tmbattle.take_owner(_turn_rand((chan, index))[1], actor, n)
+        if _who == actor and hit:
+            _event_count(chan, index, actor, "chance", len(hit))
         _say("tm:   ...CHANCE BLOCK on tile %s (code 8): TAKE -- /R= occ 1 = %d "
              "sends every adjacent card to seat %s%s; converted tile(s) %r"
              % (target, _turn_rand((chan, index))[1], _who,
@@ -9544,7 +9645,82 @@ def _chance_after_battle(chan, index, n, actor, target, board):
     return _scrambled
 
 
-def _rotating_after_battle(chan, index, n, actor, target, board):
+def _colorshift_took_placed(board, tile, actor):
+    """Did a chance block's effect just hand the PLACED card to another seat?
+
+    WARNING: IF SO THE PLACEMENT IS OVER -- measured live 2026-09-24T22:53Z (2P VS.
+    COM). Card 90 (all eight arrows) on tile 7 had two targets, chance
+    blocks 6 and 11, both code 8. The player chose 11; `/R=` occ 1 = 254 sent
+    the neighbours to seat 1, NOT the attacker, and tile 7 was one of them.
+    This server then fought tile 6 anyway, with the card it had just lost,
+    and consumed it. The client did not: on turn 1 the COM's card 46 on tile
+    1 pointed SE at tile 6, the client still had a "?" there and parked on a
+    battle this server never fought. The turn never ended.
+
+    The client's -BattleCheck is the PLACER's; once the placed card is no
+    longer theirs it has nothing left to fight with. So this ends the
+    placement the way a loss does: no more battles and no pending flips
+    (unmeasured -- in the live sample tile 7 had no flippable neighbours).
+    A code 8 that keeps the card with the attacker (occ 1 < 0xB3) is
+    untouched: the 22:44Z 3P game fought on to a second block and did not hang.
+
+    `POL_TM_COLORSHIFT_ENDS=0` restores the old keep-fighting behaviour.
+    """
+    if not _env_int("POL_TM_COLORSHIFT_ENDS", 1):
+        return False
+    placed = board.get(int(tile))
+    if placed is None or placed.owner == actor:
+        return False
+    _say("tm:   ...the chance block handed the PLACED card on tile %s to seat "
+         "%s -- the placement ends here (no more battles, no flips), as the "
+         "client's does" % (tile, placed.owner))
+    return True
+
+
+def _block_has_no_verdict(tile, target, actor, board):
+    """A battle against a BLOCK (owner 4) has NO WINNER. True -> no capture,
+    no loss: the caller re-contests from the placed tile and never fights
+    `target` again this placement.
+
+    WARNING: THE 2026-09-26 VS. COM FREEZE (2P, vs Flower Girl Natasha). State
+    9 reads the DEFENDER'S owner before any count-down:
+
+        0xCF687  al = [target.card + 0x1D]      the owner
+        0xCF68E  cmp al, 4 / je 0xCF6C7
+        0xCF6C7  id == 0x8009 ?  -> state 0x1E (0xCF6F5), or 0x0A (0xCF703)
+                                    whose tail 0xCF9BD sends 0x8009 to 0x1E
+        0xCF711  anything else   -> state 0x11, the chance effect
+
+    The count-down that decides a battle, 0xD34D0, is called from state 0xB
+    only (0xCFA2E), and the two writes that hand a tile over live in its tail
+    (loss 0xCFAB4, win 0xCFC45). A block battle never enters 0xB, so the
+    client never takes the block and never loses the placed card to it: our
+    `/A=`/`/D=` rolls are shown and ignored. After the effect, state 0x1D
+    (0xD24BD) empties the tile and re-runs the arrow engine from the placed
+    tile when it is still the current player's (0xD25B3 / 0xD25B8); the
+    rotating path ends at 0x22 with the fired block's mark stepped 3 -> 2
+    (0xD2E6F), which the neutral arm then skips for the rest of the placement
+    (0xD386F).
+
+    This server used to run its LOSS arm on a lost chance-block roll: T2 the
+    COM's card on tile 5 became owner 4, T3 and T4 then fought "block" cards
+    the client holds as seat 1's, and T5 parked for a 3-target
+    @BattleSelect ([5, 6, 12]) while the client, holding one target (12),
+    auto-selected and waited for a @BattleData that never came.
+
+    `POL_TM_BLOCK_NO_VERDICT=0` restores the old verdict-driven arms.
+    """
+    if not _env_int("POL_TM_BLOCK_NO_VERDICT", 1):
+        return False
+    _say("tm:   ...tile %s fought the BLOCK on tile %s: NO verdict (0xCF68E -> "
+         "state 0x11/0x1E, never the count-down 0xB) -- the placed card stays "
+         "seat %s's and the placement re-contests from it"
+         % (tile, target, board[int(tile)].owner if int(tile) in board
+            else actor))
+    return True
+
+
+def _rotating_after_battle(chan, index, n, actor, target, board, res=None):
     """Fire a battled ROTATING BLOCK's ray. Returns True if `target` was one.
 
     WARNING: A TRUE RETURN MEANS THE CALLER MUST NOT CAPTURE THE TILE. The client's
@@ -9564,17 +9740,31 @@ def _rotating_after_battle(chan, index, n, actor, target, board):
     # that froze that game.
     _turn = int((_MATCH_TURN.get((chan, index)) or {}).get("turn") or 0)
     _adv = _turn * _env_int("POL_TM_ROTATING_STEP", 1)
+    # WARNING: THE RAY WRAPS AND REACHES (2026-09-26 VS. COM freeze). The client
+    # walks the ray through its WRAPPING table (rva 0x2338D8, not the arrow
+    # engine's 0x233748) and walks it `min(a_raw * a_mult // 30 + 1, players)`
+    # tiles out (0xD2BE7). POL_TM_ROTATING_WRAP=0 / POL_TM_ROTATING_REACH=0
+    # restore the old one-tile ray that stops at the edge.
+    _wrap = bool(_env_int("POL_TM_ROTATING_WRAP", 1))
+    _reach = 1
+    if _env_int("POL_TM_ROTATING_REACH", 1) and res is not None:
+        _reach = tmbattle.ray_reach(res.get("a_raw", 1), res.get("a_mult", 1), n)
     hit = tmbattle.apply_rotating(board, _board_tiles(n), int(target), actor,
-                                  players=n, advance=_adv)
+                                  players=n, advance=_adv, wrap=_wrap,
+                                  reach=_reach)
     _phase = tmbattle.rotating_phase(blk, _adv)
-    _aim = (tmbattle.ray_target(_board_tiles(n), int(target), _phase)
+    _aim = (tmbattle.ray_target(_board_tiles(n), int(target), _phase,
+                                wrap=_wrap)
             if _phase is not None else None)
     _watch_effect(chan, index, "ray", target, hit, aim=_aim)
+    if hit:
+        _event_count(chan, index, actor, "rot", len(hit))
     _say("tm:   ...ROTATING BLOCK on tile %s: it is NOT captured -- it fires "
-         "one tile %s (deal phase %s + turn %d -> phase %s, opposite its arrow "
-         "bit) at tile %s, and converted %r for seat %s"
-         % (target, tmbattle.DIR_NAMES[(( _phase or 0) - 4) & 7],
-            tmbattle.rotating_phase(blk, 0), _turn, _phase, _aim, hit, actor))
+         "%d tile(s) %s (deal phase %s + turn %d -> phase %s, opposite its "
+         "arrow bit; wrap=%d) first at tile %s, and converted %r for seat %s"
+         % (target, _reach, tmbattle.DIR_NAMES[(( _phase or 0) - 4) & 7],
+            tmbattle.rotating_phase(blk, 0), _turn, _phase, int(_wrap), _aim,
+            hit, actor))
     return True
 
 
@@ -9801,12 +9991,24 @@ def _apply_placement(chan, index, n, actor, tile, row, rnd=None):
     battles, guard = [], 0
     marks = tmbattle.contest(board, tiles, int(tile), actor, players=n)
     ties = _env_int("POL_TM_BATTLE_TIES", 0)
+    # Blocks already fought in THIS placement -- the client's mark 2 (see
+    # `_block_has_no_verdict`). `contest` is stateless; this is not.
+    _fought_blk = set()
+
+    def _recontest():
+        m = tmbattle.contest(board, tiles, int(tile), actor, players=n)
+        if _env_int("POL_TM_BLOCK_NO_VERDICT", 1):
+            for _t in _fought_blk:
+                m.pop(_t, None)
+        return m
+
     while guard < 64:
         guard += 1
         target = tmbattle.next_defender(marks)
         if target is None:
             break
         att, dfn = board[int(tile)], board[target]
+        _vs_block = dfn.owner == tmbattle.OWNER_BLOCK
         res = tmbattle.resolve(att.row, dfn.row, rnd,
                                att_ability=att.ability, dfn_ability=dfn.ability,
                                att_mod=att.modifier, dfn_mod=dfn.modifier)
@@ -9825,7 +10027,8 @@ def _apply_placement(chan, index, n, actor, tile, row, rnd=None):
         _watch_battle(chan, index, int(tile), target, res, verdict)
         # The ray fires on the battle RESOLVING, like the chance effects, and
         # a true return means the block is NOT captured below.
-        _rot = _rotating_after_battle(chan, index, n, actor, target, board)
+        _rot = _rotating_after_battle(chan, index, n, actor, target, board,
+                                      res=res)
         if _chance_after_battle(chan, index, n, actor, target, board):
             # WARNING: A SCRAMBLE ENDS THE PLACEMENT. Every card has just been lifted
             # and redealt, so `tile` and every entry in `marks` are stale
@@ -9833,6 +10036,12 @@ def _apply_placement(chan, index, n, actor, tile, row, rnd=None):
             # longer held the placed card and raised KeyError. The client's own
             # flow agrees: the effect runs at the END of the battle chain and
             # returns to the idle state, not to more resolution.
+            if battles:
+                _burn_attack_boost(board, tile)
+            _board_map_log(board, tiles, tile, row, battles)
+            _note_combo(chan, index, actor, board, _before, tile)
+            return battles, {}
+        if _colorshift_took_placed(board, int(tile), actor):
             if battles:
                 _burn_attack_boost(board, tile)
             _board_map_log(board, tiles, tile, row, battles)
@@ -9852,6 +10061,12 @@ def _apply_placement(chan, index, n, actor, tile, row, rnd=None):
             # every pass until the 64-step guard. The client stops this with
             # its per-tile mark; we do it by taking the target off the list.
             marks.pop(target, None)
+            _fought_blk.add(target)
+        elif _vs_block and _block_has_no_verdict(tile, target, actor, board):
+            # No winner: the chance block is consumed (or, never dealt, a
+            # code 18 stands and is not fought again) and the placement goes on.
+            _fought_blk.add(target)
+            marks = _recontest()
         elif verdict == tmbattle.ATTACKER:
             # WARNING: A CONSUMED CHANCE BLOCK LEAVES NOTHING TO TAKE. Its tile was
             # emptied above, so there is no card to change hands and none for
@@ -9865,7 +10080,7 @@ def _apply_placement(chan, index, n, actor, tile, row, rnd=None):
                     _say("tm:   ...combo: tile %d (seat %s's, reached by the "
                          "beaten card on tile %d) taken by seat %s"
                          % (_ct, _loser, target, actor))
-            marks = tmbattle.contest(board, tiles, int(tile), actor, players=n)
+            marks = _recontest()
         else:
             # The placed card is taken. 0xCFAB4 writes the DEFENDER'S owner
             # onto the attacker's tile -- and the WINNER combos through it:
@@ -10091,6 +10306,7 @@ def _advance_placement(chan, index, chosen=None):
             return True
         # Resolve `target`, re-rolling a draw (the client fights it again and
         # asks for a second @BattleData; we re-roll rather than ship a hang).
+        _vs_block = board[target].owner == tmbattle.OWNER_BLOCK
         while True:
             att, dfn = board[tile], board[target]
             res = tmbattle.resolve(att.row, dfn.row, rnd,
@@ -10101,9 +10317,15 @@ def _advance_placement(chan, index, chosen=None):
                 continue
             break
         _battle_push(chan, index, turn, tile, target, res, verdict, roster)
-        _rot = _rotating_after_battle(chan, index, n, owner, target, board)
+        _rot = _rotating_after_battle(chan, index, n, owner, target, board,
+                                      res=res)
         if _chance_after_battle(chan, index, n, owner, target, board):
             # The same rule as `_apply_placement`: a scramble ends it.
+            _finish()
+            return True
+        if _colorshift_took_placed(board, tile, owner):
+            # The same rule as `_apply_placement`: a code 8 that hands the
+            # placed card away ends it.
             _finish()
             return True
         if _rot:
@@ -10113,6 +10335,9 @@ def _advance_placement(chan, index, chosen=None):
             # dict would not stick -- the set on the pending record does.
             _fought_rot.add(target)
             continue
+        if _vs_block and _block_has_no_verdict(tile, target, owner, board):
+            _fought_rot.add(target)       # consumed already; a code 18 stands
+            continue                      # re-contest (0xD25B8), no verdict
         if verdict == tmbattle.ATTACKER:
             # WARNING: The same consumed-block guard as `_apply_placement`.
             if target in board:
@@ -10164,6 +10389,20 @@ def _advance_placement(chan, index, chosen=None):
 _MATCH_COMBO = {}
 
 
+#: TOURNAMENT MISSION COUNTERS for the match in progress: (chan, index) ->
+#: {seat: {"combos", "rot", "chance"}}. Filled by the battle code below,
+#: read once by _event_score_game, cleared when an event deal starts.
+_EVENT_COUNTS = {}
+
+
+def _event_count(chan, index, seat, key, n=1):
+    try:
+        d = _EVENT_COUNTS.setdefault((chan, index), {}).setdefault(int(seat), {})
+        d[key] = int(d.get(key) or 0) + int(n)
+    except Exception:
+        pass
+
+
 def _note_combo(chan, index, actor, board, before, placed):
     """Record the size of the chain one placement just took.
 
@@ -10193,6 +10432,11 @@ def _note_combo(chan, index, actor, board, before, placed):
                     and before[t] != actor and c.owner == actor)
         if taken <= 0:
             return
+        if taken >= 2:
+            # A COMBO for the tournament mission "Exceed N combos!": one
+            # placement that takes two or more cards is a chain. The client's
+            # own unit is unmeasured (see above); this is the reading.
+            _event_count(chan, index, actor, "combos")
         seat = _MATCH_COMBO.setdefault((chan, index), {})
         if taken > int(seat.get(actor) or 0):
             seat[actor] = taken
@@ -10243,6 +10487,77 @@ def _board_scores(chan, index, n):
         if card.owner is not None and 0 <= card.owner < len(out):
             out[card.owner] += 1
     return out
+
+
+def _is_perfect_win(scores, win):
+    """True when seat `win` owns EVERY owned card on the finished board.
+
+    The client's result pass (0xCC58D) compares each seat's score with the
+    board total from 0xC73DC and, on equality, sets the seat flag +0x1A2 = 3
+    and [obj+0x189] = 3 -- a PERFECT. The total is the count of cards a seat
+    owns (unowned blocks/specials carry owner 4/8 and are in no seat's count,
+    exactly as `_board_scores` skips them), so the test is "the winner's count
+    is the sum of every seat's count, and is not 0". In two players that means
+    the loser holds no tile at all.
+    """
+    if not scores or not 0 <= win < len(scores):
+        return False
+    return scores[win] > 0 and scores[win] == sum(scores)
+
+
+def _perfect_take(take):
+    """Commit a PERFECT win's take: the winner gets EVERY loser pool card.
+
+    On a perfect the clients skip the take-select scene: the winner's client
+    moves all of each loser's pool cards to itself (slot order 0..4) and sends
+    no `@GetSelect=`, and the loser's client animates the same without polling
+    (0x43, 15). So the server commits the whole transfer here, once, and marks
+    the take complete (`picked` covers every loser, `taken` set) so the
+    @Ready= / @GetSelect= arms see nothing left to wait for.
+
+    Same side effects the per-pick paths use: `_collection_add_cards` for a
+    member winner (a COM winner owns no collection), `_collection_remove_card`
+    for a member loser under `POL_TM_TAKE_LOSS` (a COM pool leaves nothing).
+    `POL_TM_TAKE_WIN=0` / `POL_TM_TAKE_COM=0` keep their per-pick meaning:
+    no transfer for a human / COM winner respectively.
+    """
+    if take.get("taken"):
+        return
+    win = take.get("win")
+    pools = take.get("pools") or []
+    ros = take.get("roster") or []
+    wmid = ros[win] if win is not None and win < len(ros) else None
+    take["perfect"] = True
+    take["taken"] = True
+    picked = take.setdefault("picked", [])
+    losers = _losers_from(win, pools)
+    if wmid is not None:
+        doit = _env_int("POL_TM_TAKE_WIN", 1)
+    else:
+        doit = _env_int("POL_TM_TAKE_COM", 1)
+    for seat in losers:
+        pool = pools[seat]
+        cards = [[int(v) for v in r.split(b"|")] for r in pool]
+        picked.extend(c[0] for c in cards)
+        if not doit:
+            continue
+        lmid = ros[seat] if seat < len(ros) else None
+        if wmid is not None:
+            _collection_add_cards(wmid, cards)
+        if lmid is not None and (wmid is None
+                                 or _push_key(lmid) != _push_key(wmid)) \
+                and _env_int("POL_TM_TAKE_LOSS", 1):
+            for r, c in zip(pool, cards):
+                _collection_remove_card(lmid, c[0], row=r)
+        _say("tm: VERIFIED: PERFECT: %s takes ALL %d card(s) of seat %d's pool%s: %s"
+             % (("member %s" % wmid) if wmid is not None
+                else ("the COM (seat %d)" % win),
+                len(cards), seat,
+                (" = member %s" % lmid) if lmid is not None else " (COM)",
+                " ".join(str(c[0]) for c in cards)))
+    if not doit:
+        _say("tm:   ...PERFECT take not transferred (POL_TM_TAKE_%s=0)"
+             % ("WIN" if wmid is not None else "COM"))
 
 
 def _board_takes(chan, index, n):
@@ -10894,8 +11209,63 @@ def _streak_next(current, result):
     return -1 if cur > 0 else cur - 1
 
 
+def _com_elo(char_index):
+    """A COM opponent's fixed Elo: the rung of the deck this server deals it
+    (`_com_deck_record`; the ladder's level bands rise), spread evenly from
+    `POL_TM_ELO_COM_LO` to `POL_TM_ELO_COM_HI` (VS. Rating x100, default 150
+    and 275). A COM with no `/Com=` index sits at the middle."""
+    import tmrank as _tr
+    lo = _tr._env_float("POL_TM_ELO_COM_LO", 150)
+    hi = _tr._env_float("POL_TM_ELO_COM_HI", 275)
+    frac = 0.5
+    try:
+        ladder = _com_deck_ladder()
+        if char_index is not None and len(ladder) > 1:
+            frac = ladder.index(_com_deck_record(int(char_index))) / (len(ladder) - 1)
+    except (TypeError, ValueError):
+        pass
+    return _tr.elo_of_display(lo + (hi - lo) * frac)
+
+
+def _match_elos(roster, scores, n, n_solo=None, now=None):
+    """{roster index: new Elo} for one finished match, or {} when the match
+    does not rate: Elo off, a result from before `tmrank.elo_from()`, no
+    board scores, or the same member in two seats.
+
+    Seats are `scores`' order: in PvP the roster IS the seats; in a VS. COM
+    game the one human is seat 0 and seat s >= 1 is the COM picked at `/Com=`
+    position s - 1 (`_COM_GAME`, as `_watch_seats` reads it)."""
+    import tmrank as _tr
+    now = int(time.time() if now is None else now)
+    if (not _tr.elo_enabled() or now < _tr.elo_from() or not scores
+            or not _env_int("POL_TM_RANK_RATING", 1) or not roster):
+        return {}
+    mids = [m for m, _v in roster]
+    if len(set(mids)) != len(mids):
+        return {}
+    ratings, ks = [], []
+    blocks = {}
+    for i, mid in enumerate(mids):
+        blk = (_collection_load(mid).get("rank") or {})
+        blocks[i] = blk
+        ratings.append(_tr.elo_of(blk))
+        ks.append(_tr.elo_k(blk.get("elo_games")))
+    if n_solo:
+        coms = (_COM_GAME.get(_push_key(mids[0])) or {}).get("coms") or []
+        for s in range(1, len(scores)):
+            ratings.append(_com_elo(coms[s - 1] if s - 1 < len(coms) else None))
+            ks.append(None)
+    if len(ratings) != len(scores):
+        _say("tm:   ...Elo skipped: %d seat(s) rated, %d scores" % (len(ratings), len(scores)))
+        return {}
+    new = _tr.elo_match(ratings, scores, ks)
+    _say("tm:   ...Elo: %s" % ", ".join(
+        "%s %.0f->%.0f" % ("seat %d" % i, ratings[i], new[i]) for i in range(len(new))))
+    return {i: new[i] for i in range(len(mids))}
+
+
 def _bump_result_stats(member_id, score, place=None, opponents=None,
-                       combo=0):
+                       combo=0, elo=None):
     """One finished match for `member_id`: advance the career counters and
     return `(games, score_total)`.
 
@@ -10933,6 +11303,17 @@ def _bump_result_stats(member_id, score, place=None, opponents=None,
         # lists and only rank members who played in the tallied week
         # (tmrank._eligible). Every result counts, COM games included.
         block["last_played"] = int(time.time())
+        # ...and HOW MANY this week, for the board's "This Week So Far"
+        # (tmrank.week_games_of): a stamp from an older week starts at 0.
+        wk = _tr.week_start(block["last_played"])
+        block["week_games"] = (1 + max(0, int(block.get("week_games") or 0))
+                               if block.get("week_of") == wk else 1)
+        block["week_of"] = wk
+        # ...the Elo `_match_elos` worked out for this seat (None = this
+        # result does not rate), which `rating_of` below shows
+        if elo is not None:
+            block["elo"] = round(float(elo), 2)
+            block["elo_games"] = max(0, int(block.get("elo_games") or 0)) + 1
         # ...AND THE VS. RATING, which is what the ranking lists sort on
         # (tmrank.LISTS: menus 0/1/2 read it, x100 fixed point). SE's formula
         # is unrecoverable; the average score x100 is ours by construction
@@ -11400,8 +11781,9 @@ def _resultdata_body(rand, seats=None, me=0, scores=None, stats=None,
 
     WARNING: The server still does not decide who WON on this message: 0xCBD80
     computes win/lose from the per-seat tile counts (block 0x5246580, stride
-    0x30) the match itself filled. What a win PAYS is still the take flow's
-    open question -- nothing here invents a prize.
+    0x30) the match itself filled. What a win PAYS is the house prize
+    (`_house_prize`, a COM game), which the client's count-up credits from
+    occ 1.
 
     `POL_TM_RESULT_P=0` restores the pre-crash one-liner, kept ONLY as
     measurement apparatus for the divide itself.
@@ -11871,10 +12253,14 @@ def _queue_next_turn(chan, index, seats, turn, active, roster=None, n_solo=None,
         # Computed over the FULL score vector, not the roster, so a COM game
         # ranks the human against the machine rather than against nobody.
         places = _placements(scores) if scores else []
+        # ...AND THE ELO VS. RATING (tmrank.elo_match), from everyone's
+        # PRE-match rating, so it is worked out before any seat is written.
+        elos = _match_elos(roster, scores, n, n_solo)
         for i, (mid, _v) in enumerate(roster):
             stats[_push_key(mid)] = _bump_result_stats(
                 mid, scores[i] if i < len(scores) else 0,
                 place=places[i] if i < len(places) else None,
+                elo=elos.get(i),
                 # `n`, not len(roster): a COM game has one human on the roster
                 # and the client still counts the machine as an opponent
                 # (0xCC79D reads the PLAYER COUNT, which is what /N= carried).
@@ -11899,13 +12285,46 @@ def _queue_next_turn(chan, index, seats, turn, active, roster=None, n_solo=None,
         # slot), and until 2026-09-02 the settlement ran AFTER the pushes,
         # so the result screen's wager row read the 0 we served -- the
         # wallet moved, the screen did not (the stats bug one message
-        # over). Mirror of the client's own arithmetic: decisive win = the
-        # pot doubles (0x10BC54, cap 2000) and pays out, so net +wager;
-        # decisive loss = the stake stays gone; a draw returns it
-        # (INFERRED -- flagged in the handler). Settled once: `staked` is
-        # cleared, and @GameExit refunds only what is still staked.
+        # over). A COM win pays the retail house prize (`_house_prize`; the
+        # older "the pot doubles and pays out" was a misread of the Double Up
+        # rematch rule); a loss keeps the stake; a draw returns it. Settled
+        # once: `staked` is cleared, and @GameExit refunds only what is still
+        # staked.
         prizes = {}
-        if n_solo and _com_wager_enabled():
+        if n_solo and roster and _env_int("POL_TM_HOUSE_PRIZE", 1):
+            # THE HOUSE PRIZE (`_house_prize`): every decisive win pays,
+            # whatever the stake -- a 0-gil player's stake-0 win over an
+            # opponent of average rank 2.93 is 153. The stake itself was taken at @ComGame= and is not
+            # handed back on a win (the client does not hand it back either).
+            _wmid = roster[0][0]
+            _wentry = _COM_GAME.get(_push_key(_wmid)) or {}
+            _wstk = int(_wentry.get("staked") or 0)                 if _com_wager_enabled() else 0
+            _wcoms = list(_wentry.get("coms") or [])
+            _wranks = [_com_avg_rank(_wcoms[s - 1] if s - 1 < len(_wcoms)
+                                     else None)
+                       for s in range(1, len(scores))]
+            _pay = _house_prize(_wstk, _wranks, scores, 0)
+            if scores and max(scores) == min(scores):
+                if _pay:
+                    _set_money(_wmid, money_of(_wmid) + _pay,
+                               "VS. COM draw -- stake returned")
+            elif _pay > 0:
+                _set_money(_wmid, money_of(_wmid) + _pay,
+                           "VS. COM WIN -- house prize %d (stake %d, COM "
+                           "average rank %s, scores %s)"
+                           % (_pay, _wstk, "/".join(str(r) for r in _wranks),
+                              "/".join(str(v) for v in scores)))
+                _bump_prize(_wmid, _pay, "VS. COM win")
+            else:
+                _say("tm:   ...VS. COM LOSS -- no prize; the %d stake is "
+                     "forfeit" % _wstk)
+            # /D= occ 1 is what the client's count-up adds to its wallet, so
+            # it carries exactly what the server credited: prize or refund.
+            prizes[_push_key(_wmid)] = _pay
+            if _wentry.get("staked") is not None:
+                _wentry["staked"] = None
+                _stake_clear(_wmid)
+        elif n_solo and _com_wager_enabled():
             _wentry = _COM_GAME.get(_push_key(roster[0][0])) if roster else None
             _wstk = (_wentry or {}).get("staked")
             if _wstk:
@@ -12058,6 +12477,14 @@ def _queue_next_turn(chan, index, seats, turn, active, roster=None, n_solo=None,
                     st["take"] = {"win": win, "lose": lose,
                                   "pools": [list(p) for p in pools],
                                   "roster": [m for m, _v in roster]}
+                    # A PERFECT WIN (the winner owns every owned card on the
+                    # board -- the client's own test, see `_is_perfect_win`)
+                    # has no take-select scene: both clients move EVERY loser
+                    # pool card to the winner by themselves, and no
+                    # `@GetSelect=` is sent or polled. POL_TM_PERFECT_TAKE=0
+                    # restores the one-pick-per-loser flow.
+                    _perfect = bool(_env_int("POL_TM_PERFECT_TAKE", 1)
+                                    and _is_perfect_win(scores, win))
                     ga = (_turn_code(GETAWAY_CMD, turn)
                           + b"@GetAway=/P=%d" % lose)
                     # WHO GETS @GetAway. The arm (0x104FF6, read 2026-09-07)
@@ -12100,7 +12527,22 @@ def _queue_next_turn(chan, index, seats, turn, active, roster=None, n_solo=None,
                          "recipient) + @GetAway=/P=%d to %s. Watch for "
                          "'---->Recv=TRADELIST'."
                          % ("|".join(str(len(p)) for p in pools), lose, _ga_to))
-                    if n_solo and win != 0 and _env_int("POL_TM_TAKE_COM", 1):
+                    if _perfect:
+                        # COMMITTED HERE, AT RESULT TIME: this block runs once
+                        # per match (`result_sent`), the pools are in hand, and
+                        # nothing depends on a client message that a perfect
+                        # win does not send -- the winner's @Ready= never
+                        # reaches the take logic in a COM game, and a winner
+                        # that drops after the result still has the cards its
+                        # client already moved. A COM winner's pick is NOT
+                        # pushed: the loser's client does not poll (0x43, 15)
+                        # on a perfect, so it would only sit in the queue.
+                        _say("tm:   ...PERFECT WIN by seat %d (%s of %d owned "
+                             "tiles): no take-select scene, every loser pool "
+                             "card goes to the winner"
+                             % (win, scores[win], sum(scores)))
+                        _perfect_take(st["take"])
+                    elif n_solo and win != 0 and _env_int("POL_TM_TAKE_COM", 1):
                         # THE COM WON: the picks are the server's to make --
                         # the loser's screen polls (0x43, 15) (0xCA481) and
                         # parks without them. ONE PICK PER LOSING SEAT
@@ -12219,24 +12661,141 @@ def _com_deck_ladder():
     return ladder or [base]
 
 
+#: THE VS. COM OPPONENTS' OWN ROWS: `PlPrm.BIN` (built into services/tmdata/
+#: by tools/tmdata_build.py from your client), 20-byte records after the
+#: 16-byte header, indexed by the client's `/Com=` value. Record 0 is the
+#: player's own placeholder row, never an opponent.
+#:
+#:   +0x04  the opponent's AVERAGE RANK (x100), which 0x1109C6 copies into
+#:          the COM seat's rank slot when the match is built (0xEC169 ->
+#:          0x110970). Lower is stronger.
+#:   +0x0B  the PackPrm record of the opponent's own DECK. Several opponents
+#:          deal from a record off the 25..44 ladder.
+#:
+#: This replaces the guess `25 + index - 1` wrapped in the ladder, which dealt
+#: every opponent from 21 on a beginner deck. POL_TM_COM_DECKS=ladder
+#: restores it. Without the table, decks fall back to the ladder and every
+#: COM's average rank to the placeholder's 200.
+_PLPRM = None
+_PLPRM_REC = 20
+_COM_RANK_DEFAULT = 200
+
+
+def _plprm():
+    """[(average rank x100, deck record)] per `PlPrm.BIN` record; [] if the
+    table is missing or unreadable."""
+    global _PLPRM
+    if _PLPRM is None:
+        _PLPRM = []
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            with open(os.path.join(here, "tmdata", "PlPrm.BIN"), "rb") as f:
+                blob = f.read()
+            n = struct.unpack_from("<I", blob, 4)[0]
+            if 0 < n <= 256 and len(blob) >= 16 + _PLPRM_REC * n:
+                for i in range(n):
+                    o = 16 + _PLPRM_REC * i
+                    _PLPRM.append((struct.unpack_from("<H", blob, o + 4)[0],
+                                   blob[o + 0x0B]))
+        except Exception as exc:
+            _say("tm: PlPrm.BIN unreadable (%r) -- COM decks use the ladder and "
+                 "every COM's average rank is %d" % (exc, _COM_RANK_DEFAULT))
+    return _PLPRM
+
+
+def _com_deck_of(char_index):
+    """The PackPrm deck record `PlPrm.BIN` names for opponent `char_index`,
+    or None."""
+    t = _plprm()
+    try:
+        i = int(char_index)
+    except (TypeError, ValueError):
+        return None
+    return t[i][1] if 0 < i < len(t) else None
+
+
+def _com_avg_rank(char_index):
+    """One COM opponent's average rank x100 (`PlPrm.BIN` +0x04); an index
+    outside the table gets the placeholder row's value."""
+    t = _plprm()
+    base = t[0][0] if t else _COM_RANK_DEFAULT
+    try:
+        i = int(char_index)
+    except (TypeError, ValueError):
+        return base
+    return t[i][0] if 0 < i < len(t) else base
+
+
+#: WARNING: EVERY WIN PAYS A HOUSE PRIZE, AND UNTIL 2026-09-26 THIS SERVER PAID NONE.
+#: A player with 0 gil beat Lumberjack Mick six times and earned nothing,
+#: because the settlement only doubled the stake and a broke player's stake is
+#: always 0 (0xEC7EF clamps the COM's wager to the wallet).
+#:
+#: SE's guidebook (`pml/game/tetra/guidebook/tactics/src/srpm082.pml`):
+#:
+#:     2 players: prize = {(4 - opponent's average rank) x 0.5 + 1} x (stake + 100)
+#:     3 players: the same over the MEAN of the opponents' average ranks,
+#:                x the number of players who finished below you
+#:     perfect win: x3
+#:
+#: and `guidebook/manual/in_mnd.pml` tells a new player to start with VS. COM
+#: against Natasha, "and your money grows as you play" -- the house prize is
+#: the bootstrap for a 0-gil account (a new save starts at 0).
+#:
+#: The client carries the same arithmetic, TM.dll 0xCC719..0xCC7A6 (in
+#: 0xCBD80), writing struct +0xCC:
+#:
+#:     ((0x190 - avgOpp) / 2 + 100) * (pot + 100) * perfect * beaten / 100
+#:
+#: perfect = 3 when the seat holds every card, beaten = seats strictly below,
+#: a loss 0, a draw = the pot. The result count-up (0xC7DBE..) then CREDITS
+#: +0xCC to the wallet. Online the client skips its own formula ([0x52464CA]
+#: is set) and takes +0xCC from `@ResultData /D=` occ 1 (0x1042B4) -- so SE's
+#: server computed it, and so must we. An earlier reading called this value
+#: "Technical Rating" from a screenshot; it is the prize.
+#:
+#: PARTIAL: The stake is NOT returned on top: the client's pot-return arms need
+#: [0x52464C9] == 1, which the online init zeroes, so its wallet reads
+#: `wallet - stake + prize` and the server mirrors that. The guidebook's
+#: manual page (srpm030) says a 2-player perfect is x2; srpm082 and the code
+#: say x3 -- `POL_TM_PRIZE_PERFECT` holds the code's 3.
+#:
+#: `POL_TM_HOUSE_PRIZE=0` restores the old "win pays 2 x stake" settlement.
+def _house_prize(pot, opp_ranks, scores, seat=0):
+    """The retail prize for `seat` (see the banner above): 0 on a loss, the
+    pot on an all-level draw, otherwise the guidebook formula."""
+    pot = max(0, int(pot or 0))
+    scores = list(scores or [])
+    if len(scores) < 2 or not (0 <= seat < len(scores)):
+        return 0
+    if max(scores) == min(scores):
+        return pot
+    mine = scores[seat]
+    beaten = sum(1 for i, v in enumerate(scores) if i != seat and v < mine)
+    if beaten <= 0:
+        return 0
+    ranks = [int(r) for r in (opp_ranks or [])] or [_com_avg_rank(0)]
+    avg = sum(ranks) // len(ranks)
+    perfect = _env_int("POL_TM_PRIZE_PERFECT", 3)         if all(v == 0 for i, v in enumerate(scores) if i != seat) else 1
+    return max(0, ((400 - avg) // 2 + 100) * (pot + 100) * perfect * beaten
+               // 100)
+
+
 def _com_deck_record(char_index):
     """The PackPrm record number for one COM character's deck.
 
-    WARNING: THE `/Com=` INDEX -> RECORD MAPPING IS UNMEASURED. The character-select
-    screen's per-entry table ([obj+0x1CA], builder 0x107239) presumably names
-    each character's deck record, but nobody has read it. Until then the guess
-    is `POL_TM_COM_DECK_BASE` (default 25, the ladder's first rung) + the
-    character index -- but that plain offset walked PAST the deck ladder for
-    any index >= 21 and landed on the single-card Prize Center records, so the
-    COM was dealt five copies of one card (reported live 2026-09-02: Trade King
-    Gohn, `/Com=23` -> record 47 = Maechen x5). We now WRAP within the real
-    deck ladder, which guarantees a varied deck for every index. The FLAVOUR
-    is still a guess -- a wrong deck is visible, not fatal, and the real fix is
-    reading the select table -- but five identical cards is not a flavour, it
-    is a broken deck.
+    The client's own table (`PlPrm.BIN` +0x0B, `_com_deck_of`).
+    Anything outside it, or a record that is not a COM deck, falls back to the
+    old ladder guess - wrapped, so it can never land on a single-card Prize
+    Center record (a plain offset once dealt Trade King Gohn Maechen x5).
     """
+    i = int(char_index)
+    no = _com_deck_of(i)
+    if os.environ.get("POL_TM_COM_DECKS", "") != "ladder" and no is not None:
+        if _is_com_deck(_pack_rec(no)):
+            return no
     ladder = _com_deck_ladder()
-    return ladder[max(0, int(char_index) - 1) % len(ladder)]
+    return ladder[max(0, i - 1) % len(ladder)]
 
 
 def _com_deck_rows(char_index):
@@ -14367,6 +14926,7 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
         return encode_code(MSG_OPTANS) + (b"@OptAns=/Ans=%d" % _opt_ans())
 
     if b"@ShReq=" in cmd:
+        _PRIZE_DOOR.discard(member_id)
         # Player Data -> Cards. One field, `/EN=`, and it must be > 0; the
         # client then takes OUR message's sender id as the card-shop endpoint.
         # See the banner above `_sh_enabled`.
@@ -14686,6 +15246,32 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
         # number into the save the client loads.
         _no = re.search(rb"/No=(\d+)", cmd or b"")
         _pack_no = _no.group(1) if _no else None
+        # KEY: THE PRIZE CENTER EXCHANGE (2026-09-25). Behind `@CvReq=` a
+        # `@Buy=` spends PRIZE POINTS on one of PackPrm records 45..74 (+0x04
+        # cost in points, +0x20 the card) -- it must never touch gold, which
+        # is what this arm did before (tm-buy-price-depends-on-the-door).
+        # `/No=` is taken as the record (45..74) or as the prize index (0..29):
+        # which one TM.dll sends was never captured, and the two ranges do not
+        # overlap. The card rides the pack path's single-card fallback.
+        # POL_TM_PRIZE_EXCHANGE=0 restores the old (gold) behaviour.
+        if (member_id in _PRIZE_DOOR and tmprize is not None
+                and _env_int("POL_TM_PRIZE_EXCHANGE", 1)):
+            _n = int(_pack_no) if _pack_no is not None else -1
+            _rec = _n if 45 <= _n < 75 else (45 + _n if 0 <= _n < 30 else None)
+            _pts = _pack_price(_rec) if _rec is not None else None
+            if _pts is None:
+                _say("tm: member %s Prize Center @Buy= /No=%s names no prize "
+                     "-- silent" % (member_id, _n))
+                return None
+            _left = tmprize.spend(member_id, int(_pts), say=_say)
+            if _left is None:
+                _say("tm:   WARNING: member %s cannot afford prize record %d (%d "
+                     "points) -- no card; the client should not have asked"
+                     % (member_id, _rec, _pts))
+                return None
+            _say("tm: VERIFIED: member %s exchanged %d prize point(s) for prize "
+                 "record %d (%d left)" % (member_id, _pts, _rec, _left))
+            return _shopbuy_body(body[:8], member_id, b"%d" % _rec)
         if _env_int("POL_TM_BUY_DEBIT", 1):
             _cost = _pack_price(_pack_no)
             if _cost is None:
@@ -14777,6 +15363,8 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
         # RANKINGS -> PRIZE CENTER. See the banner above `_cv_en`.
         if not _cv_enabled():
             return None
+        if member_id is not None:
+            _PRIZE_DOOR.add(member_id)
         lines = [encode_code(MSG_CVENTER) + (b"@CvEnter=/EN=%d" % _cv_en())]
         # ...AND THE SAME UNSOLICITED (0xB2, 0x13) PUSH THE SHOP GETS. Measured
         # live 2026-08-16: `@CvEnter=/EN=1` alone is ACCEPTED -- the client takes
@@ -14965,6 +15553,7 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
         # route the COM game into the reservation branch.
         if not _gameeca_enabled():
             return None
+        _drop_stale_match_pushes(member_id, "a new VS. COM game (@GameENC=)")
         en = _gameeca_en()
         _say("tm: member %s @GameENC= -- VS. COM game request; answering "
              "@GameECA=/EN=%d (msgid 0x%02X). /EN= MUST be > 0: TM.dll 0x853AF "
@@ -15569,7 +16158,7 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
             # from it to `5 * N` before it prints `End` -- see `_turn_code`.
             first = _env_int("POL_TM_FIRST_TURN", 0)
             _MATCH_TURN[(chan, index)] = {"turn": first, "active": starter,
-                                          "n": n_eff}
+                                          "n": n_eff, "starter": starter}
             _live_matches_write()
             # The WATCHER deal (@StartData + turn-0 @TurnData) is sent AFTER the
             # players' deal below, so it can share the players' turn-0 `rnd`.
@@ -15689,8 +16278,13 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
                 # @PutCard(0) -> @TurnData(1) ... in order.
                 # `POL_TM_WATCH_STARTDATA=0` turns the watcher deal off.
                 if _watchers_of(chan, index) and _env_int("POL_TM_WATCH_STARTDATA", 1):
+                    # WARNING: THE BOARD RIDES ALONG (2026-09-25): without `codes`
+                    # the watcher's deal had /F= all zeros -- no blocks, no
+                    # special tiles -- so an observer drew an empty board and
+                    # its replay of the first battle on a block went wrong.
                     _wsd = (_turn_code(STARTDATA_CMD, first)
-                            + _startdata_body(seats, 0, starter, n_solo=com_n))
+                            + _startdata_body(seats, 0, starter, n_solo=com_n,
+                                              codes=_codes))
                     _wtd0 = (_turn_code(TURNDATA_CMD, first)
                              + _turndata_body(seats, 0, starter, rnd,
                                               scores=([0] * n_eff
@@ -15754,8 +16348,16 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
         # UNDER it is what makes every COM `_watch_push` reach them unchanged.
         _wkey = (_wchan, _widx)
         _wcom = _com_key_at(_wchan, _widx)
-        _wseats = next((v[2] for v in _MATCH_ROSTER.values()
-                        if v[0] == _wchan and v[1] == _widx), [])
+        # WARNING: A LIVE VS. COM GAME WINS OVER A STALE PvP ROSTER (2026-09-25).
+        # `_MATCH_ROSTER` keeps a PvP match's seats after it ends, so a COM
+        # game later played at the SAME table was answered with the old PvP
+        # players and the watcher was registered under that dead key -- it
+        # then received nothing (a bot vs COM
+        # at table 1 after a PvP match there). The COM binding only exists
+        # while its game runs, so when it is present it is the answer.
+        _wseats = [] if _wcom is not None else next(
+            (v[2] for v in _MATCH_ROSTER.values()
+             if v[0] == _wchan and v[1] == _widx), [])
         _wcoms = []
         if not _wseats and _wcom is not None:
             _wgot = _COM_GAME.get(_wcom[1]) or {}
@@ -16260,6 +16862,16 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
             wager = max(0, min(int(_rl.group(1)) if _rl else 0, cap))
             wager = min(wager, money_of(member_id))   # 0x10CF82's own rule
             rules[0] = wager
+        # ...AND KEEP THE PLAYER'S RULES FOR THE BOARD DEAL (`_com_rules_of`):
+        # the echo only reaches the client's screen, and the deal is ours.
+        # Only an echoed /Rule= is in COM order; the `_rule_seven` fallback
+        # is @Tet order and would land on the wrong names.
+        if _rl_all and _env_int("POL_TM_COM_ECHO_RULES", 1)                 and _push_key(member_id) is not None:
+            _vals = [int(v) for v in _rl_all.group(1).split(b"|")]
+            if len(_vals) >= len(COM_RULE_KEYS):
+                _COM_GAME.setdefault(
+                    _push_key(member_id),
+                    {"n": None, "coms": [], "peer": peer_nick})["rules"] =                     dict(zip((k.decode() for k in COM_RULE_KEYS), _vals))
         _say("tm: member %s @ComGame= (0x43, msgid %d) -- answering IN THAT SLOT "
              "with @ComGameInit=, /R=%s. Look for '---->Recv=COMGAMEINIT' in the "
              "client's own trace." % (member_id, msgid,
@@ -16572,13 +17184,22 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
                              % (member_id, hsel, _seatL, len(_pool)))
                 else:
                     _say("tm:   ...all %d picks already committed for this "
-                         "match -- echo only" % len(_losers))
+                         "match%s -- echo only"
+                         % (len(_losers),
+                            " (a PERFECT: the whole pool moved at the result)"
+                            if _take.get("perfect") else ""))
             elif _take:
                 _say("tm:   ...the winner is seat %d, sender is seat %d -- "
                      "echo only" % (_take.get("win"), _my_seat))
         # In PvP the other seats watch the take on the same slot; a COM game
-        # has nobody else to tell.
-        for mid, _v in seats:
+        # has nobody else to tell. A PERFECT take has no pick to watch: the
+        # loser's client does not poll (0x43, 15), so a relayed echo would
+        # only sit in its queue -- the stray @GetSelect is answered, not told.
+        _perf_gs = False
+        if seats:
+            _perf_gs = bool(((_MATCH_TURN.get((chan, index)) or {})
+                             .get("take") or {}).get("perfect"))
+        for mid, _v in ([] if _perf_gs else seats):
             if _push_key(mid) == _push_key(member_id):
                 continue
             _queue_push(mid, body[:8] + (b"@GetSelect=/E=%d/H=%d" % (ev, hsel)),
@@ -16891,6 +17512,7 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
         return mine
 
     if b"@Quit=" in cmd:
+        _PRIZE_DOOR.discard(member_id)
         # Leaving the card shop. Unanswered, this hangs the client and the
         # session dies ~75 s later -- see the banner above `CARDPRM_RECORDS`.
         if not _shopquit_enabled():
@@ -18168,6 +18790,15 @@ def _selftest_ingame():
             _say("FAIL: @ComGame= must be answered in the msgid it arrived on, "
                  "got %r" % (ans5,)); ok = False
 
+        # stale in-match pushes from an earlier game die at a new @GameENC=
+        _queue_push("staletest", b"43000906@TurnData=/A=1/S=1|0", "stale turn")
+        _queue_push("staletest", b"41000E00@GameEA=/Exit=1", "not in-match")
+        if _drop_stale_match_pushes("staletest", "selftest") != 1 or \
+                len(_PUSHES.get(_push_key("staletest")) or []) != 1:
+            _say("FAIL: a stale @TurnData must be dropped and a non-match push kept")
+            ok = False
+        _PUSHES.pop(_push_key("staletest"), None)
+
         # --- the VS. COM roster: /Com= is the player count, and every -------
         # --- in-match push must be framed from the game peer ----------------
         # Live 2026-08-22T13:57Z: a 3-player COM game (@ComGame=/Com=1|2) was
@@ -18500,7 +19131,11 @@ def _selftest_ingame():
         _tkm = (None, _push_key("tclm"))
         _COM_GAME[_push_key("tclm")] = {"n": 2, "coms": [1]}
         _MATCH_HANDS[_tkm] = {("deck", 0): [_rowA], ("deck", 1): [_rowA]}
-        _MATCH_BOARD[_tkm] = {0: tmbattle.Card(_rowA, 0)}   # human wins 1-0
+        # human wins 2-1: NOT a perfect (the COM still holds a tile), so
+        # this is the one-pick flow -- a 1-0 board is a PERFECT win now.
+        _MATCH_BOARD[_tkm] = {0: tmbattle.Card(_rowA, 0),
+                              1: tmbattle.Card(_rowA, 0),
+                              2: tmbattle.Card(_rowA, 1)}
         _PUSHES.pop(_push_key("tclm"), None)
         _collection_store("tclm", {"cards": []}, sync_save=False)
         _queue_next_turn(None, _push_key("tclm"), [], 10, 0,
@@ -18526,7 +19161,9 @@ def _selftest_ingame():
         _COM_GAME[_push_key("tclm")] = {"n": 3, "coms": [1, 2]}
         _MATCH_HANDS[_tkm] = {("deck", 0): [_rowA], ("deck", 1): [_rowA],
                               ("deck", 2): [_rowA]}
-        _MATCH_BOARD[_tkm] = {0: tmbattle.Card(_rowA, 0)}   # human wins 1-0-0
+        _MATCH_BOARD[_tkm] = {0: tmbattle.Card(_rowA, 0),  # human wins
+                              1: tmbattle.Card(_rowA, 0),  # 2-1-0: not a
+                              2: tmbattle.Card(_rowA, 1)}  # perfect
         _collection_store("tclm", {"cards": []}, sync_save=False)
         _queue_next_turn(None, _push_key("tclm"), [], 15, 0,
                          roster=[("tclm", 0)], n_solo=3)
@@ -18546,7 +19183,9 @@ def _selftest_ingame():
         for _d in (_MATCH_HANDS, _MATCH_BOARD, _MATCH_TURN, _TURN_RAND):
             _d.pop(_tkm, None)
         _MATCH_HANDS[_tkm] = {("deck", 0): [_rowA], ("deck", 1): [_rowA]}
-        _MATCH_BOARD[_tkm] = {0: tmbattle.Card(_rowA, 1)}   # the COM wins 1-0
+        _MATCH_BOARD[_tkm] = {0: tmbattle.Card(_rowA, 1),  # the COM wins
+                              1: tmbattle.Card(_rowA, 1),  # 2-1: not a
+                              2: tmbattle.Card(_rowA, 0)}  # perfect
         _collection_store("tclm", {"cards": [[42, 43, 1, 20, 18, 7, 4, 255]]},
                           sync_save=False)
         _queue_next_turn(None, _push_key("tclm"), [], 10, 0,
@@ -18572,7 +19211,9 @@ def _selftest_ingame():
         _rowB = b"47|38|1|28|11|7|3|255"
         _tkp = (None, "pvp-take-test")
         _MATCH_HANDS[_tkp] = {("deck", 0): [_rowA], ("deck", 1): [_rowB]}
-        _MATCH_BOARD[_tkp] = {0: tmbattle.Card(_rowA, 1)}   # seat 1 wins 0-1
+        _MATCH_BOARD[_tkp] = {0: tmbattle.Card(_rowA, 1),  # seat 1 wins
+                              1: tmbattle.Card(_rowA, 1),  # 1-2: not a
+                              2: tmbattle.Card(_rowB, 0)}  # perfect
         _collection_store("tclm", {"cards": []}, sync_save=False)
         _collection_store("tclo", {"cards": [[42, 43, 1, 20, 18, 7, 4, 255]]},
                           sync_save=False)
@@ -18622,6 +19263,246 @@ def _selftest_ingame():
                     os.remove(_pth)
             except OSError:
                 pass
+
+        # --- the PERFECT take: the winner owns EVERY owned card on the board --
+        # (client result pass 0xCC58D: score == board total -> flag 3). No
+        # take-select scene on either client: the winner's client moves ALL of
+        # each loser's pool cards to itself and sends no @GetSelect, the
+        # loser's does not poll (0x43, 15). The server commits the whole pool
+        # at the result, and a COM winner's pick is NOT pushed.
+        _prows = [b"%d|40|1|20|18|7|4|255" % (60 + _i) for _i in range(5)]
+        _qrows = [b"%d|41|2|21|19|8|5|255" % (80 + _i) for _i in range(5)]
+        _pcards = [[int(v) for v in r.split(b"|")] for r in _prows]
+        _qcards = [[int(v) for v in r.split(b"|")] for r in _qrows]
+
+        def _perf_board(owner_tiles):
+            # tiles -> owner; an unowned BLOCK (owner 4) is on the board too
+            # and is in nobody's count -- it must not spoil a perfect.
+            b_ = {t: tmbattle.Card(_prows[0], o) for t, o in owner_tiles}
+            b_[15] = tmbattle.Card(b"32769|0|0|0|0|0|0|0",
+                                   tmbattle.OWNER_BLOCK)
+            return b_
+
+        def _perf_clean(key):
+            _MATCH_OBJECTS.clear()
+            for _d in (_MATCH_HANDS, _MATCH_BOARD, _MATCH_TURN, _TURN_RAND,
+                       _MATCH_CONTINUE, _CARD_READY):
+                _d.pop(key, None)
+            _CONTINUE_READY.pop(key, None)
+            for _m in ("pfw", "pfl", "tclm"):
+                _PUSHES.pop(_push_key(_m), None)
+
+        def _pcards_of(m):
+            return _collection_load(m).get("cards") or []
+
+        def _pgs(m):
+            return any(b"@GetSelect=" in e[1]
+                       for e in (_PUSHES.get(_push_key(m)) or []))
+
+        _saved_pt = os.environ.get("POL_TM_PERFECT_TAKE")
+        _saved_hold2 = os.environ.get("POL_TM_READY_HOLD_LOSER")
+        _saved_com_tclm = _COM_GAME.get(_push_key("tclm"))
+        _sv_mof2 = _match_of
+        _tkq = (None, "pvp-perf-test")
+        _tkc = (None, _push_key("tclm"))
+        _pseats = [("pfl", 0), ("pfw", 0)]      # pfl seat 0, pfw seat 1
+        try:
+            os.environ.pop("POL_TM_PERFECT_TAKE", None)     # default = on
+            _COM_GAME.pop(_push_key("pfw"), None)
+            _COM_GAME.pop(_push_key("pfl"), None)
+            # (P1) 2-PLAYER PvP PERFECT: seat 1 (pfw) owns all 3 owned tiles,
+            # seat 0 (pfl) none. pfw gains all 5 of pfl's pool, pfl loses all
+            # 5, nothing waits on a @GetSelect, and @Ready completes.
+            _perf_clean(_tkq)
+            _MATCH_HANDS[_tkq] = {("deck", 0): list(_prows),
+                                  ("deck", 1): list(_qrows)}
+            _MATCH_BOARD[_tkq] = _perf_board([(0, 1), (1, 1), (5, 1)])
+            _collection_store("pfw", {"cards": [list(c) for c in _qcards]},
+                              sync_save=False)
+            _collection_store("pfl", {"cards": [list(c) for c in _pcards]},
+                              sync_save=False)
+            _queue_next_turn(None, "pvp-perf-test", _pseats, 10, 0,
+                             roster=_pseats)
+            _tkP = (_MATCH_TURN.get(_tkq) or {}).get("take") or {}
+            if not _tkP.get("perfect"):
+                _say("FAIL: PERFECT: a 3-0 PvP board (plus an unowned block) "
+                     "is a perfect win -- take['perfect'] must be set, got %r"
+                     % (_tkP,)); ok = False
+            _wc = sorted(c[0] for c in _pcards_of("pfw"))
+            if _wc != sorted(c[0] for c in _qcards + _pcards):
+                _say("FAIL: PERFECT: the PvP winner must gain ALL 5 of the "
+                     "loser's pool cards at the result, got %r" % (_wc,))
+                ok = False
+            if _pcards_of("pfl"):
+                _say("FAIL: PERFECT: the PvP loser must lose ALL 5 pool cards "
+                     "(POL_TM_TAKE_LOSS), got %r" % (_pcards_of("pfl"),))
+                ok = False
+            if _pgs("pfw") or _pgs("pfl"):
+                _say("FAIL: PERFECT: a PvP perfect queues no @GetSelect")
+                ok = False
+            globals()["_match_of"] = lambda m: (None, "pvp-perf-test",
+                                                _pseats)
+            os.environ["POL_TM_READY_HOLD_LOSER"] = "1"
+            handle_line(b"43000E0A@Ready=/Ans=0", member_id="pfw")
+            handle_line(b"43000E0A@Ready=/Ans=0", member_id="pfl")
+            _pr2 = handle_line(b"43000E0A@Ready=/Ans=0", member_id="pfl")
+            # (the reply may also carry drained result pushes -- look for the
+            # @Ready answer itself, and for no held entry)
+            _pr2b = _pr2 if isinstance(_pr2, bytes) else b"".join(_pr2 or [])
+            if b"@Ready=/Go=" not in _pr2b or (
+                    (_MATCH_TURN.get(_tkq) or {}).get("take") or {}).get(
+                        "held_ready"):
+                _say("FAIL: PERFECT: the loser's 2nd @Ready= must NOT be held "
+                     "-- there is no pick coming, got %r" % (_pr2,)); ok = False
+            # a stray winner @GetSelect only echoes: no 2nd transfer, and
+            # nothing relayed into the loser's queue.
+            _PUSHES.pop(_push_key("pfl"), None)
+            _sg = handle_line(b"43000F01@GetSelect=/H=0", member_id="pfw")
+            _sgb = _sg if isinstance(_sg, bytes) else b"".join(_sg or [])
+            if len(_pcards_of("pfw")) != 10 or b"@GetSelect=" not in _sgb:
+                _say("FAIL: PERFECT: a stray @GetSelect must echo and move "
+                     "nothing, got %r / %d cards"
+                     % (_sg, len(_pcards_of("pfw")))); ok = False
+            if _pgs("pfl"):
+                _say("FAIL: PERFECT: a stray @GetSelect must not be relayed "
+                     "to a loser that never polls (0x43, 15)"); ok = False
+            handle_line(b"43000E0A@Ready=/Ans=0", member_id="pfw")
+            _cr = _CONTINUE_READY.get(_tkq) or set()
+            if _push_key("pfw") not in _cr or _push_key("pfl") not in _cr:
+                _say("FAIL: PERFECT: both 2nd @Ready=s must open the panel "
+                     "(the take is complete), got %r" % (_cr,)); ok = False
+            globals()["_match_of"] = _sv_mof2
+            _perf_clean(_tkq)
+
+            # (P2) NON-PERFECT PvP is unchanged: 2-1, no transfer at the
+            # result, the winner's one @GetSelect moves one card.
+            _MATCH_HANDS[_tkq] = {("deck", 0): list(_prows),
+                                  ("deck", 1): list(_qrows)}
+            _MATCH_BOARD[_tkq] = _perf_board([(0, 1), (1, 1), (5, 0)])
+            _collection_store("pfw", {"cards": []}, sync_save=False)
+            _collection_store("pfl", {"cards": [list(c) for c in _pcards]},
+                              sync_save=False)
+            _queue_next_turn(None, "pvp-perf-test", _pseats, 10, 0,
+                             roster=_pseats)
+            _tkN = (_MATCH_TURN.get(_tkq) or {}).get("take") or {}
+            if not _tkN or _tkN.get("perfect") or _pcards_of("pfw"):
+                _say("FAIL: PERFECT: a 2-1 board is NOT perfect -- nothing "
+                     "moves at the result, got %r" % (_tkN,)); ok = False
+            globals()["_match_of"] = lambda m: (None, "pvp-perf-test",
+                                                _pseats)
+            handle_line(b"43000F01@GetSelect=/H=2", member_id="pfw")
+            handle_line(b"43000F01@GetSelect=/H=3", member_id="pfw")
+            globals()["_match_of"] = _sv_mof2
+            if [c[0] for c in _pcards_of("pfw")] != [62] \
+                    or len(_pcards_of("pfl")) != 4:
+                _say("FAIL: PERFECT: a non-perfect PvP take is ONE pick "
+                     "(slot 2 = card 62), got %r / %r"
+                     % (_pcards_of("pfw"), _pcards_of("pfl"))); ok = False
+            _perf_clean(_tkq)
+
+            # (P3) KNOB 0 = the old flow on a perfect board: no transfer at
+            # the result, one pick by @GetSelect.
+            os.environ["POL_TM_PERFECT_TAKE"] = "0"
+            _MATCH_HANDS[_tkq] = {("deck", 0): list(_prows),
+                                  ("deck", 1): list(_qrows)}
+            _MATCH_BOARD[_tkq] = _perf_board([(0, 1), (1, 1), (5, 1)])
+            _collection_store("pfw", {"cards": []}, sync_save=False)
+            _collection_store("pfl", {"cards": [list(c) for c in _pcards]},
+                              sync_save=False)
+            _queue_next_turn(None, "pvp-perf-test", _pseats, 10, 0,
+                             roster=_pseats)
+            if ((_MATCH_TURN.get(_tkq) or {}).get("take") or {}).get(
+                    "perfect") or _pcards_of("pfw"):
+                _say("FAIL: PERFECT: POL_TM_PERFECT_TAKE=0 must restore the "
+                     "one-pick flow (nothing moves at the result)"); ok = False
+            globals()["_match_of"] = lambda m: (None, "pvp-perf-test",
+                                                _pseats)
+            handle_line(b"43000F01@GetSelect=/H=0", member_id="pfw")
+            globals()["_match_of"] = _sv_mof2
+            if len(_pcards_of("pfw")) != 1 or len(_pcards_of("pfl")) != 4:
+                _say("FAIL: PERFECT: POL_TM_PERFECT_TAKE=0 -- the @GetSelect "
+                     "must take ONE card, got %r" % (_pcards_of("pfw"),))
+                ok = False
+            _perf_clean(_tkq)
+            os.environ.pop("POL_TM_PERFECT_TAKE", None)
+
+            # (P4) VS. COM, HUMAN PERFECT: tclm gets all 5 COM cards; no
+            # @GetSelect is pushed.
+            _perf_clean(_tkc)
+            _COM_GAME[_push_key("tclm")] = {"n": 2, "coms": [1]}
+            _MATCH_HANDS[_tkc] = {("deck", 0): list(_prows),
+                                  ("deck", 1): list(_qrows)}
+            _MATCH_BOARD[_tkc] = _perf_board([(0, 0), (3, 0)])
+            _collection_store("tclm", {"cards": [list(c) for c in _pcards]},
+                              sync_save=False)
+            _queue_next_turn(None, _push_key("tclm"), [], 10, 0,
+                             roster=[("tclm", 0)], n_solo=2)
+            _hc = sorted(c[0] for c in _pcards_of("tclm"))
+            if _hc != sorted(c[0] for c in _pcards + _qcards):
+                _say("FAIL: PERFECT: a VS. COM human perfect must add ALL 5 "
+                     "COM cards (and remove none of the human's), got %r"
+                     % (_hc,)); ok = False
+            if _pgs("tclm"):
+                _say("FAIL: PERFECT: a human perfect pushes no @GetSelect")
+                ok = False
+            _perf_clean(_tkc)
+
+            # (P5) VS. COM, COM PERFECT: the COM's pick is NOT pushed (the
+            # loser's client does not poll 15 on a perfect) and the human
+            # loses all 5 pool cards.
+            _MATCH_HANDS[_tkc] = {("deck", 0): list(_prows),
+                                  ("deck", 1): list(_qrows)}
+            _MATCH_BOARD[_tkc] = _perf_board([(0, 1), (3, 1), (7, 1)])
+            _collection_store("tclm", {"cards": [list(c) for c in _pcards]},
+                              sync_save=False)
+            _queue_next_turn(None, _push_key("tclm"), [], 10, 0,
+                             roster=[("tclm", 0)], n_solo=2)
+            if _pgs("tclm"):
+                _say("FAIL: PERFECT: a COM perfect must NOT push the COM's "
+                     "@GetSelect"); ok = False
+            if _pcards_of("tclm"):
+                _say("FAIL: PERFECT: a COM perfect must remove ALL 5 of the "
+                     "human's pool cards, got %r" % (_pcards_of("tclm"),))
+                ok = False
+            _perf_clean(_tkc)
+
+            # (P6) KNOB 0, COM perfect: the COM's @GetSelect is pushed again
+            # and exactly one card leaves.
+            os.environ["POL_TM_PERFECT_TAKE"] = "0"
+            _MATCH_HANDS[_tkc] = {("deck", 0): list(_prows),
+                                  ("deck", 1): list(_qrows)}
+            _MATCH_BOARD[_tkc] = _perf_board([(0, 1), (3, 1), (7, 1)])
+            _collection_store("tclm", {"cards": [list(c) for c in _pcards]},
+                              sync_save=False)
+            _queue_next_turn(None, _push_key("tclm"), [], 10, 0,
+                             roster=[("tclm", 0)], n_solo=2)
+            if not _pgs("tclm") or len(_pcards_of("tclm")) != 4:
+                _say("FAIL: PERFECT: POL_TM_PERFECT_TAKE=0 -- a COM win "
+                     "pushes its one @GetSelect and takes ONE card")
+                ok = False
+            _perf_clean(_tkc)
+        finally:
+            globals()["_match_of"] = _sv_mof2
+            for _k, _v in (("POL_TM_PERFECT_TAKE", _saved_pt),
+                           ("POL_TM_READY_HOLD_LOSER", _saved_hold2)):
+                if _v is None:
+                    os.environ.pop(_k, None)
+                else:
+                    os.environ[_k] = _v
+            if _saved_com_tclm is None:
+                _COM_GAME.pop(_push_key("tclm"), None)
+            else:
+                _COM_GAME[_push_key("tclm")] = _saved_com_tclm
+            _perf_clean(_tkq)
+            _perf_clean(_tkc)
+            for _m in ("pfw", "pfl"):
+                for _pth in (_collection_file(_m), _save_resource_file(_m)):
+                    try:
+                        if _pth and os.path.exists(_pth):
+                            os.remove(_pth)
+                    except OSError:
+                        pass
+        _say("selftest: the PERFECT take (all pools, no @GetSelect)")
 
         # --- the PvP WAGER: escrow at the result ----------------------------
         # (The stake-in half rides the accept quorum in _queue_vsgameinit;
@@ -18960,10 +19841,13 @@ def _selftest_ingame():
         _MATCH_BOARD[_tkm] = {0: tmbattle.Card(_rowA, 0)}   # human wins
         _queue_next_turn(None, _push_key("tclm"), [], 10, 0,
                          roster=[("tclm", 0)], n_solo=2)
-        if money_of("tclm") != 750 + 500:
-            _say("FAIL: a decisive COM win pays min(2*wager, 2000) -- the "
-                 "client doubles the pot at 0x10BC54 -- got %d"
-                 % money_of("tclm")); ok = False
+        # A PERFECT win over /Com=1 with 250 staked pays
+        # ((400 - its average rank)//2 + 100) x (250 + 100) x 3 // 100
+        # (1575 against the client's table, where /Com=1 is rank 300).
+        _hp1 = ((400 - _com_avg_rank(1)) // 2 + 100) * 350 * 3 // 100
+        if money_of("tclm") != 750 + _hp1:
+            _say("FAIL: a perfect COM win pays the house prize "
+                 "(0xCC719: %d) -- got %d" % (_hp1, money_of("tclm"))); ok = False
         if (_COM_GAME.get(_push_key("tclm")) or {}).get("staked") is not None:
             _say("FAIL: the settlement must clear `staked` (or @GameExit "
                  "double-refunds)"); ok = False
@@ -18981,13 +19865,168 @@ def _selftest_ingame():
             _say("FAIL: a result must stamp tiled_games (the games tiles_total "
                  "covers -- rating_of's denominator) and last_played (the Top "
                  "30 activity rule), got %r" % (_rk,)); ok = False
-        if _rk.get("prize_total") != 250 or _rk.get("prize_week") != 250:
+        if _rk.get("prize_total") != _hp1 or _rk.get("prize_week") != _hp1:
             _say("FAIL: a wager win must add the net winnings to "
                  "prize_total AND prize_week (the Grand/Weekly Total "
                  "lists), got %r" % (_rk,)); ok = False
         if (_collection_load("tclm").get("staked_wager")) is not None:
             _say("FAIL: the settlement must clear the DURABLE stake record "
                  "too (staked_wager -- the restart-orphan ledger)"); ok = False
+        if time.time() < _trk.elo_from() and "elo" in _rk:
+            _say("FAIL: a result before POL_TM_ELO_FROM must not rate, got %r"
+                 % (_rk,)); ok = False
+        # --- THE HOUSE PRIZE AT STAKE 0 -------------------------------------
+        # A broke player vs an opponent of average rank 2.93: the COM's
+        # wager clamps to the empty wallet, and the win STILL pays.
+        if (_house_prize(0, [293], [2, 1]) != 153
+                or _house_prize(0, [293], [3, 0]) != 459
+                or _house_prize(0, [300], [2, 1]) != 150
+                or _house_prize(0, [100], [2, 1]) != 250
+                or _house_prize(0, [293], [1, 2]) != 0
+                or _house_prize(300, [293], [2, 2]) != 300
+                # 3 players, 1st of 3: mean rank (300+100)/2 = 200 ->
+                # 200 x 100 x 2 beaten / 100 = 400; 2nd of 3 beats one.
+                or _house_prize(0, [300, 100], [3, 2, 1]) != 400
+                or _house_prize(0, [300, 100], [2, 3, 1]) != 200):
+            _say("FAIL: _house_prize must match the guidebook / 0xCC719 -- "
+                 "got %r" % ([_house_prize(0, [293], [2, 1]),
+                              _house_prize(0, [293], [3, 0]),
+                              _house_prize(0, [300, 100], [3, 2, 1])],))
+            ok = False
+        # Out of range is the placeholder row, table or no table.
+        if _com_avg_rank(99) != _com_avg_rank(0) or _com_avg_rank(None) != _com_avg_rank(0):
+            _say("FAIL: _com_avg_rank must fall back to the placeholder row")
+            ok = False
+        if not _plprm():
+            _say("selftest: services/tmdata/PlPrm.BIN missing -- COM average "
+                 "ranks use the default (run tools/tmdata_build.py)")
+        _hp2 = ((400 - _com_avg_rank(2)) // 2 + 100) * 100 // 100
+        _collection_store("tclz", {"cards": [], "money": 0}, sync_save=False)
+        handle_line(b"43000600@ComGame=/Rule=0|1|1|1|3|0|0|0/Com=2",
+                    member_id="tclz", peer_nick=b"UTESTPEER")
+        _tkz = (None, _push_key("tclz"))
+        _MATCH_HANDS[_tkz] = {("deck", 0): [_rowA], ("deck", 1): [_rowA]}
+        _MATCH_BOARD[_tkz] = {0: tmbattle.Card(_rowA, 0),
+                              1: tmbattle.Card(_rowA, 0),
+                              2: tmbattle.Card(_rowA, 1)}   # 2-1, not perfect
+        _PUSHES.pop(_push_key("tclz"), None)
+        _queue_next_turn(None, _push_key("tclz"), [], 10, 0,
+                         roster=[("tclz", 0)], n_solo=2)
+        if money_of("tclz") != _hp2:
+            _say("FAIL: a stake-0 COM win over /Com=2 must pay the %d house "
+                 "prize (the 0-gil bootstrap), got %d" % (_hp2, money_of("tclz")))
+            ok = False
+        _rz = [e[1] for e in (_PUSHES.get(_push_key("tclz")) or [])
+               if b"@ResultData=" in e[1]]
+        _dz = _pipe_vals(_rz[0], b"/D=") if _rz else []
+        if len(_dz) < 2 or int(_dz[1]) != _hp2:
+            _say("FAIL: @ResultData /D= occ 1 must carry the %d the server "
+                 "credited (the client's count-up adds it), got %r" % (_hp2, _dz))
+            ok = False
+        # ...and the kill switch restores the old settlement: nothing at stake 0.
+        _collection_store("tclz", {"cards": [], "money": 0}, sync_save=False)
+        os.environ["POL_TM_HOUSE_PRIZE"] = "0"
+        try:
+            handle_line(b"43000600@ComGame=/Rule=0|1|1|1|3|0|0|0/Com=2",
+                        member_id="tclz", peer_nick=b"UTESTPEER")
+            _MATCH_HANDS[_tkz] = {("deck", 0): [_rowA], ("deck", 1): [_rowA]}
+            _MATCH_BOARD[_tkz] = {0: tmbattle.Card(_rowA, 0)}
+            _queue_next_turn(None, _push_key("tclz"), [], 10, 0,
+                             roster=[("tclz", 0)], n_solo=2)
+            if money_of("tclz") != 0:
+                _say("FAIL: POL_TM_HOUSE_PRIZE=0 must pay nothing at stake 0, "
+                     "got %d" % money_of("tclz")); ok = False
+        finally:
+            os.environ.pop("POL_TM_HOUSE_PRIZE", None)
+        for _d in (_MATCH_BOARD, _MATCH_TURN, _TURN_RAND, _MATCH_HANDS,
+                   _MATCH_CONTINUE, _CARD_READY):
+            _d.pop(_tkz, None)
+        _COM_GAME.pop(_push_key("tclz"), None)
+        _PUSHES.pop(_push_key("tclz"), None)
+        # --- A COM BOARD HONOURS THE PLAYER'S RULES --------------------------
+        # /Rule= in COM order is bm,st,cb,ca,tl,du: all three object rules off
+        # must deal no special / chance / rotating tile, ever (PLAIN blocks
+        # are every board's and no rule removes them); on, they must appear.
+        _sv_bo = os.environ.get("POL_TM_BOARD_OBJECTS")
+        os.environ["POL_TM_BOARD_OBJECTS"] = "1"     # the suite pins it off
+        for _rule, _want_empty in ((b"0|0|0|0|3|0|0|0", True),
+                                   (b"0|1|1|1|3|0|0|0", False)):
+            _collection_store("tcr", {"cards": [], "money": 0}, sync_save=False)
+            handle_line(b"43000600@ComGame=/Rule=" + _rule + b"/Com=1",
+                        member_id="tcr", peer_nick=b"UTESTPEER")
+            _objs = [_match_objects(None, _push_key("tcr"), 2, fresh=True)
+                     for _ in range(20)]
+            _empty = all(tmbattle.object_kind(c) == "plain"
+                         for o in _objs for c in o if c)
+            if _empty != _want_empty:
+                _say("FAIL: COM board with /Rule=%s must be %s, got %r (rules %r)"
+                     % (_rule.decode(), "empty" if _want_empty else "dealt",
+                        _objs[:3], _com_rules_of(None, _push_key("tcr"))))
+                ok = False
+            _MATCH_OBJECTS.pop((None, _push_key("tcr")), None)
+            _MATCH_BOARD.pop((None, _push_key("tcr")), None)
+            _COM_GAME.pop(_push_key("tcr"), None)
+            _PUSHES.pop(_push_key("tcr"), None)
+        if _sv_bo is None:
+            os.environ.pop("POL_TM_BOARD_OBJECTS", None)
+        else:
+            os.environ["POL_TM_BOARD_OBJECTS"] = _sv_bo
+        # --- A 10-CARD PACK KEEPS TEN ----------------------------------------
+        # The Beginner's Pack deals ten; `@Get=` used to keep the first five.
+        _pk10 = [[i, 1, 0, 1, 1, 0, 1, 255] for i in range(10)]
+        for _cap, _want in ((None, 10), ("5", 5)):
+            _collection_store("tpk", {"cards": [], "money": 0}, sync_save=False)
+            if _cap:
+                os.environ["POL_TM_PACK_KEEP_MAX"] = _cap
+            try:
+                _collection_offer("tpk", _pk10)
+                _collection_commit_offer("tpk")
+            finally:
+                os.environ.pop("POL_TM_PACK_KEEP_MAX", None)
+            _got = len(_collection_load("tpk").get("cards") or [])
+            if _got != _want:
+                _say("FAIL: a 10-card pack must keep %d card(s) (cap %s), got %d"
+                     % (_want, _cap, _got)); ok = False
+        # ...and from POL_TM_ELO_FROM on, the same COM win moves an ELO: the
+        # human's rises off the anchor, against /Com=1's fixed rating, and
+        # the VS. Rating shown is that Elo.
+        _saved_ef = os.environ.get("POL_TM_ELO_FROM")
+        os.environ["POL_TM_ELO_FROM"] = "1"
+        try:
+            _collection_store("tclme", {"cards": [], "money": 0}, sync_save=False)
+            handle_line(b"43000600@ComGame=/Rule=0|0|1|1|1|0|0|0/Com=1",
+                        member_id="tclme", peer_nick=b"UTESTPEER")
+            _tke = (None, _push_key("tclme"))
+            _MATCH_HANDS[_tke] = {("deck", 0): [_rowA], ("deck", 1): [_rowA]}
+            _MATCH_BOARD[_tke] = {0: tmbattle.Card(_rowA, 0)}   # human wins
+            _queue_next_turn(None, _push_key("tclme"), [], 10, 0,
+                             roster=[("tclme", 0)], n_solo=2)
+            _rke = (_collection_load("tclme").get("rank")) or {}
+            _want = _trk.elo_match([_trk.ELO_ANCHOR, _com_elo(1)], [1, 0],
+                                   [_trk.elo_k(0), None])[0]
+            if (_rke.get("elo_games") != 1 or abs(_rke.get("elo", 0) - round(_want, 2)) > 0.01
+                    or _rke.get("rating") != _trk.elo_display(_rke.get("elo", 0))):
+                _say("FAIL: a COM win from POL_TM_ELO_FROM on must store the "
+                     "Elo (want %.2f) and show it as the rating, got %r"
+                     % (_want, _rke)); ok = False
+            # PvP: every seat is a member, and a member in two seats rates no one
+            _collection_store("tclmp", {"cards": [], "money": 0}, sync_save=False)
+            _pv = _match_elos([("tclme", 0), ("tclmp", 0)], [3, 7], 2)
+            if not (set(_pv) == {0, 1} and _pv[1] > _trk.ELO_ANCHOR
+                    and _pv[0] < _rke.get("elo", 0)):
+                _say("FAIL: a PvP result must rate both seats, the higher "
+                     "score up, got %r" % (_pv,)); ok = False
+            if _match_elos([("tclme", 0), ("tclme", 0)], [3, 7], 2):
+                _say("FAIL: one member in two seats must not rate"); ok = False
+        finally:
+            if _saved_ef is None:
+                os.environ.pop("POL_TM_ELO_FROM", None)
+            else:
+                os.environ["POL_TM_ELO_FROM"] = _saved_ef
+            _COM_GAME.pop(_push_key("tclme"), None)
+            _PUSHES.pop(_push_key("tclme"), None)
+            for _d in (_MATCH_HANDS, _MATCH_BOARD, _MATCH_TURN, _TURN_RAND):
+                _d.pop((None, _push_key("tclme")), None)
         # ...and the AVERAGE RANK moved, which is the stat every TITLE in the
         # game is gated on and which had no producer at all before 2026-08-24.
         # A decisive win is a 1st place, so one game must read exactly 1.00.
@@ -21548,6 +22587,274 @@ def _selftest_rotating_turns():
     return ok
 
 
+def _selftest_rotating_wraps():
+    """THE ROTATING BLOCK'S RAY WRAPS (2026-09-26 VS. COM freeze, vs Akbar the
+    Hunter).
+
+    Deal /F=0|2|13|3|0|1|8|0|0|4|0|0|0|7|0|0: a code-13 block (phase 4) on
+    tile 2. The board after turn 6 is rebuilt from the log's own map lines;
+    turn 7 the human's card 47 (arrows 228, a_raw 32) on tile 7 fights the
+    block and flips 10. Phase 4 + 7 = 3 fires NW: off the board for the old
+    model ("at tile None"), but the client's ray table wraps, so it lands on
+    tile 13 -- and with a_raw 32 it walks a second step to 8. Turn 8 the COM's
+    card 35 (arrows 86) on tile 12 points E at 13, whose W arrow points back:
+    ONE battle the client waits for. Knobs off, the live log comes back
+    verbatim: nothing converted, turn 8 quiet (the freeze).
+    """
+    ok = True
+    key = ("#TMSELFTEST", 97)
+
+    class _Top(object):
+        def randrange(self, bound):
+            return bound - 1
+
+    def _cd(cid, arrows, owner, ability=0):
+        return tmbattle.Card([cid, 16, 0, 16, 16, 0, arrows, 0], owner,
+                             ability=ability)
+
+    saved_board, saved_turn = dict(_MATCH_BOARD), dict(_MATCH_TURN)
+    saved_env = {k: os.environ.get(k) for k in
+                 ("POL_TM_ROTATING_WRAP", "POL_TM_ROTATING_REACH")}
+    try:
+        for wrap, reach, want7, want8 in (
+                ("1", "1", {13: 0, 8: 0, 10: 0}, [13]),
+                ("1", "0", {13: 0, 8: 1, 10: 0}, [13]),
+                ("0", "0", {13: 1, 8: 1, 10: 0}, [])):
+            os.environ["POL_TM_ROTATING_WRAP"] = wrap
+            os.environ["POL_TM_ROTATING_REACH"] = reach
+            _MATCH_BOARD[key] = {
+                1: tmbattle.object_card(2), 2: tmbattle.object_card(13),
+                5: tmbattle.object_card(1),
+                3: _cd(89, 56, 0, ability=1), 15: _cd(48, 84, 0),
+                4: _cd(83, 78, 1), 8: _cd(45, 78, 1),
+                9: _cd(27, 45, 1, ability=2), 10: _cd(136, 45, 1),
+                13: _cd(80, 238, 1)}
+            _MATCH_TURN[key] = {"turn": 7, "active": 0, "n": 2}
+            b7, _m = _apply_placement(key[0], key[1], 2, 0, 7,
+                                      b"47|32|0|20|20|0|228|255", rnd=_Top())
+            got7 = {t: _MATCH_BOARD[key][t].owner for t in want7}
+            if [b[1] for b in b7] != [2] or got7 != want7 \
+                    or _MATCH_BOARD[key][2].owner != tmbattle.OWNER_BLOCK:
+                _say("FAIL: [wrap %s reach %s] turn 7 fought %r, owners %r, "
+                     "expected [2] and %r" % (wrap, reach, [b[1] for b in b7],
+                                              got7, want7)); ok = False
+            _MATCH_TURN[key]["turn"] = 8
+            b8, _m = _apply_placement(key[0], key[1], 2, 1, 12,
+                                      b"35|20|0|20|20|0|86|255", rnd=_Top())
+            if [b[1] for b in b8] != want8:
+                _say("FAIL: [wrap %s reach %s] turn 8 fought %r, expected %r -- %s"
+                     % (wrap, reach, [b[1] for b in b8], want8,
+                        "THE FREEZE: the client fights tile 13 here"
+                        if want8 else "the old model must reproduce the live log"))
+                ok = False
+    finally:
+        _MATCH_BOARD.clear(); _MATCH_BOARD.update(saved_board)
+        _MATCH_TURN.clear(); _MATCH_TURN.update(saved_turn)
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    return ok
+
+
+def _selftest_colorshift_ends():
+    """THE CODE-8 FREEZE, replayed (2026-09-24T22:53Z, 2P VS. COM).
+
+    Board /F=0|0|1|0|0|0|8|0|0|0|0|8|0|5|0|4, /R=189|254|... (occ 1 = 254,
+    so a code 8 hands its neighbours to the NON-attacker). Turn 0: card 90
+    (arrows 255) on tile 7, targets 6 and 11, player picks 11 -- the block
+    hands tile 7 to seat 1. Turn 1: the COM's card 46 (arrows 89) on tile 1
+    points SE at tile 6. The client still has the block there and fights it.
+
+    Knob on: turn 0 stops after 11, tile 6 stands, turn 1 fights tile 6.
+    Knob off (the twin): turn 0 also consumes 6 and turn 1 fights nothing --
+    the freeze as the live log showed it. The same turn 0 through `_apply_placement`
+    (the COM's own path) must stop the same way.
+    """
+    ok = True
+    key = ("#TMSELFTEST", 97)
+    objs = [0, 0, 1, 0, 0, 0, 8, 0, 0, 0, 0, 8, 0, 5, 0, 4]
+    row90 = b"90|18|1|42|31|8|255|255"
+    row46 = b"46|18|1|20|31|6|89|255"
+
+    class _Rig(object):
+        def __init__(self, script):
+            self.script, self.i = list(script), 0
+
+        def randrange(self, bound):
+            v = self.script[self.i % len(self.script)]
+            self.i += 1
+            return bound - 1 if v else 0
+
+    def _deal():
+        _MATCH_OBJECTS[key] = list(objs)
+        _MATCH_BOARD[key] = {t: tmbattle.object_card(c)
+                             for t, c in enumerate(objs)
+                             if tmbattle.object_card(c) is not None}
+        _TURN_RAND[key] = [189, 254, 187, 147, 119, 55, 8, 230]
+        _MATCH_TURN[key] = {"turn": 0, "active": 0, "n": 2}
+        _PENDING_BATTLE.pop(key, None)
+
+    saved = [(d, dict(d)) for d in (_MATCH_BOARD, _MATCH_OBJECTS, _TURN_RAND,
+                                    _MATCH_TURN, _PENDING_BATTLE, _PUSHES)]
+    saved_env = {k: os.environ.get(k)
+                 for k in ("POL_TM_COLORSHIFT_ENDS", "POL_TM_TURNDATA")}
+    try:
+        os.environ["POL_TM_TURNDATA"] = "0"
+        for knob in ("1", "0"):
+            os.environ["POL_TM_COLORSHIFT_ENDS"] = knob
+            _deal()
+            _begin_placement(key[0], key[1], 2, 0, 7, row90, 0, [], None,
+                             None, [], rnd=_Rig([1, 1, 0, 0]))
+            _advance_placement(key[0], key[1], chosen=11)
+            b = _MATCH_BOARD[key]
+            if key in _PENDING_BATTLE or 11 in b or b[7].owner != (
+                    1 if knob == "1" else 0):
+                _say("FAIL: [knob %s] turn 0 must consume 11 and leave tile 7 "
+                     "with seat %s; board %r"
+                     % (knob, 1 if knob == "1" else 0,
+                        {t: c.owner for t, c in b.items()})); ok = False
+            if (6 in b) != (knob == "1"):
+                _say("FAIL: [knob %s] chance block 6 must %s after turn 0"
+                     % (knob, "STAND (the client never fought it)"
+                        if knob == "1" else "be consumed (the old engine)"))
+                ok = False
+            _MATCH_TURN[key].update(turn=1, active=1)
+            b1, _m = _apply_placement(key[0], key[1], 2, 1, 1, row46,
+                                      rnd=_Rig([1, 1, 0, 0]))
+            want = [6] if knob == "1" else []
+            if [x[1] for x in b1] != want:
+                _say("FAIL: [knob %s] turn 1 (COM card 46 on tile 1) fought "
+                     "%r, expected %r%s" % (knob, [x[1] for x in b1], want,
+                     " -- THE FREEZE: the client fights the '?' on tile 6"
+                     if knob == "1" else "")); ok = False
+        # The COM's own resolver, same turn 0: next_defender picks 11 too.
+        os.environ["POL_TM_COLORSHIFT_ENDS"] = "1"
+        _deal()
+        b0, _m = _apply_placement(key[0], key[1], 2, 0, 7, row90,
+                                  rnd=_Rig([1, 1, 0, 0]))
+        b = _MATCH_BOARD[key]
+        if [x[1] for x in b0] != [11] or 6 not in b or b[7].owner != 1:
+            _say("FAIL: _apply_placement must stop after the block on 11 hands "
+                 "tile 7 away; fought %r, board %r"
+                 % ([x[1] for x in b0], {t: c.owner for t, c in b.items()}))
+            ok = False
+    finally:
+        for d, v in saved:
+            d.clear(); d.update(v)
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    return ok
+
+
+def _selftest_block_no_verdict():
+    """THE 2026-09-26 VS. COM FREEZE, replayed (vs Flower Girl Natasha,
+    2P). A LOST roll against a chance block is not a loss.
+
+    /F=7|0|4|1|12|0|0|0|2|3|6|3|6|0|4|0, /R=180|234|145|114|21|220|57|73; the
+    rolls are the live game's own `@BattleData` values. T2 the COM's card 4 on tile 5
+    fights rotating 4 and chance 0 and "loses" to 0. Client: no verdict
+    (0xCF68E), tile 5 stays seat 1's; T3 the human then loses tile 10 to
+    seat 1, T4 the COM's card on 6 touches only its own cards, and T5 the
+    human's card 5 on tile 9 has ONE target (12) -- auto-selected, no
+    @BattleSelect. Knob off, the live log comes back: 5/10/6 go to owner 4 and
+    T5 parks on [5, 6, 12], the freeze.
+    """
+    ok = True
+    key = ("#TMSELFTEST", 96)
+    objs = [7, 0, 4, 1, 12, 0, 0, 0, 2, 3, 6, 3, 6, 0, 4, 0]
+    # (attacker id, defender id) -> the live /A= and /D= (raw, roll, sel, mult)
+    rolls = {(9, 0x8006): ((6, 10, 1, 4), (1, 0, 4, 1)),
+             (4, 0x8009): ((5, 1, 1, 1), (1, 0, 4, 1)),
+             (4, 0x8007): ((5, 0, 1, 1), (1, 1, 4, 1)),
+             (6, 4): ((8, 2, 1, 1), (13, 7, 8, 1)),
+             (3, 6): ((5, 2, 1, 1), (4, 1, 8, 1)),
+             (3, 4): ((5, 1, 1, 1), (13, 5, 8, 1)),
+             (5, 0x8006): ((7, 5, 1, 1), (1, 0, 4, 1))}
+
+    def _scripted(att, dfn, rnd, **_kw):
+        a, d = rolls[(int(att["id"]), int(dfn["id"]))]
+        return {"a_raw": a[0], "a_roll": a[1], "a_sel": a[2], "a_mult": a[3],
+                "d_raw": d[0], "d_roll": d[1], "d_sel": d[2], "d_mult": d[3]}
+
+    def _owners():
+        return {t: c.owner for t, c in sorted(_MATCH_BOARD[key].items())}
+
+    def _com(turn, tile, row):
+        _MATCH_TURN[key] = {"turn": turn, "active": 1, "n": 2}
+        return [b[1] for b in _apply_placement(key[0], key[1], 2, 1, tile,
+                                               row)[0]]
+
+    def _human(turn, tile, row):
+        _MATCH_TURN[key] = {"turn": turn, "active": 0, "n": 2}
+        _begin_placement(key[0], key[1], 2, 0, tile, row, turn, [], None,
+                         None, [])
+        return _advance_placement(key[0], key[1])
+
+    saved = [(d, dict(d)) for d in (_MATCH_BOARD, _MATCH_OBJECTS, _TURN_RAND,
+                                    _MATCH_TURN, _PENDING_BATTLE, _PUSHES)]
+    saved_env = {k: os.environ.get(k)
+                 for k in ("POL_TM_BLOCK_NO_VERDICT", "POL_TM_TURNDATA")}
+    saved_resolve = tmbattle.resolve
+    try:
+        os.environ["POL_TM_TURNDATA"] = "0"
+        tmbattle.resolve = _scripted
+        for knob in ("1", "0"):
+            os.environ["POL_TM_BLOCK_NO_VERDICT"] = knob
+            _MATCH_OBJECTS[key] = list(objs)
+            _MATCH_BOARD[key] = {t: tmbattle.object_card(c)
+                                 for t, c in enumerate(objs)
+                                 if tmbattle.object_card(c) is not None}
+            _TURN_RAND[key] = [180, 234, 145, 114, 21, 220, 57, 73]
+            _PENDING_BATTLE.pop(key, None)
+            _com(0, 15, b"9|6|0|6|2|1|84|255")
+            _human(1, 11, b"9|6|0|6|2|1|126|255")
+            f2 = _com(2, 5, b"4|5|0|2|3|1|200|255")
+            _human(3, 10, b"6|8|1|6|4|1|130|255")
+            f4 = _com(4, 6, b"3|5|1|2|3|1|84|255")
+            o4 = _owners()
+            done = _human(5, 9, b"5|7|0|6|5|1|39|255")
+            o5 = _owners()
+            if knob == "1":
+                want4 = {3: 4, 4: 4, 5: 1, 6: 1, 8: 4, 10: 1, 11: 0, 12: 4,
+                         15: 0}
+                if f2 != [4, 0] or f4 != [] or o4 != want4:
+                    _say("FAIL: [knob 1] T2 fought %r (want [4, 0]), T4 fought "
+                         "%r (want [] -- tiles 5 and 10 are the COM's own), "
+                         "board after T4 %r, want %r" % (f2, f4, o4, want4))
+                    ok = False
+                if done is not True or key in _PENDING_BATTLE or 12 in o5 \
+                        or any(o5.get(t) != 0 for t in (5, 6, 9, 10)):
+                    _say("FAIL: [knob 1] T5 must fight chance block 12 alone "
+                         "(no @BattleSelect; the client auto-selects) and "
+                         "flip 5/6/10; resolved=%r board %r" % (done, o5))
+                    ok = False
+            else:
+                want4 = {3: 4, 4: 4, 5: 4, 6: 4, 8: 4, 10: 1, 11: 0, 12: 4,
+                         15: 0}
+                if f2 != [4, 0] or f4 != [10, 5] or o4 != want4:
+                    _say("FAIL: [knob 0] must reproduce the live log: T2 %r, T4 %r, "
+                         "board %r, want [4, 0] / [10, 5] / %r"
+                         % (f2, f4, o4, want4)); ok = False
+                if done is not False or key not in _PENDING_BATTLE:
+                    _say("FAIL: [knob 0] T5 must park on [5, 6, 12] as the live game "
+                         "did (got resolved=%r)" % (done,)); ok = False
+    finally:
+        tmbattle.resolve = saved_resolve
+        for d, v in saved:
+            d.clear(); d.update(v)
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    return ok
+
+
 def _selftest_replay_3p():
     """THE 3-PLAYER FREEZE, replayed (2026-09-06T23:24-23:29Z).
 
@@ -22487,6 +23794,9 @@ def _selftest_all():
     ok = _selftest_loss_combo() and ok
     ok = _selftest_replay_3p() and ok
     ok = _selftest_rotating_turns() and ok
+    ok = _selftest_rotating_wraps() and ok
+    ok = _selftest_colorshift_ends() and ok
+    ok = _selftest_block_no_verdict() and ok
     ok = _selftest_card_level() and ok
     ok = _selftest_cardselect_leave() and ok
     ok = _selftest_owner_name() and ok

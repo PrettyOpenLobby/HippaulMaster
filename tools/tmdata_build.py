@@ -6,16 +6,19 @@
 (on a default PC install that is the `TetraMaster` folder under `Program Files
 (x86)`, `PlayOnline`, `SquareEnix`)
 
-The server needs four of the client's parameter tables -- the card stats, the
-card price ladder, the VS. COM opponents and the card packs -- and none of them
+The server needs five of the client's parameter tables -- the card stats, the
+card price ladder, the title ladder, the VS. COM opponents and the card
+packs -- and none of them
 ship with this repository. This reads them out of YOUR install, decodes the
 client's own container format, and writes the plain tables where the server
 looks for them:
 
     data/CardPri.BIN   -> services/tmdata/CardPri.BIN    the sell-price ladder
     data/CardPrm.BIN   -> services/tmdata/CardPrm.BIN    one 12-byte row per card
-    data/CoPrm.BIN     -> services/tmdata/CoPrm.BIN      VS. COM opponents
+    data/CoPrm.BIN     -> services/tmdata/CoPrm.BIN      the title ladder
     data/PackPrm.BIN   -> services/tmdata/PackPrm.BIN    the card packs
+    data/PlPrm.BIN     -> services/tmdata/PlPrm.BIN      each VS. COM opponent's
+                          average rank and deck
                        -> services/tmdata/card_names_en.txt  the card names, one
                           per line, from CardPrm's own string pool when the
                           install is an English one (US/EU); a Japanese install
@@ -55,7 +58,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT_DEFAULT = os.path.normpath(os.path.join(HERE, os.pardir, "services", "tmdata"))
 MAGIC = 0x00204040
-TABLES = ("CardPri.BIN", "CardPrm.BIN", "CoPrm.BIN", "PackPrm.BIN")
+TABLES = ("CardPri.BIN", "CardPrm.BIN", "CoPrm.BIN", "PackPrm.BIN", "PlPrm.BIN")
 NAMES_FILE = "card_names_en.txt"
 CARD_COUNT = 250        # the card-number ceiling the client enforces
 CARD_REC = 12
