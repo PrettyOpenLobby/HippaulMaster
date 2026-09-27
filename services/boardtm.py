@@ -51,6 +51,22 @@ NAME = "tm"
 TITLE = "Tetra Master - Rankings & Auction"
 #: the Discord bot's words for this board's feeds: /tmboard rankings | auction | live
 DISCORD_TITLE = "Tetra Master"
+#: the bot's status. TM's marker (tm-matches-live.json, the deploy gate's own
+#: input since 2026-08-22) counts LIVE MATCHES, not players -- saying "players
+#: online" of it would be a lie, so it is named for what it is.
+PRESENCE_GAME = "tm"
+PRESENCE_ONE = "match in play"
+PRESENCE_MANY = "matches in play"
+
+
+def presence_count(args=None):
+    """TM's marker (tm-matches-live.json) is only WRITTEN while a match is
+    running, so between matches it goes stale -- and a stale marker otherwise
+    reads as "unknown", which cleared the status entirely. For this file stale
+    means something definite: no match is live. So it is 0, not unknown."""
+    import polgateway
+    n = polgateway.read_count("tm")
+    return 0 if n is None else n
 DISCORD_FEED_NAMES = {"": "rankings", "auction": "auction", "live": "live"}
 
 #: NOT under services/fedata/ (restarts FE) and NOT named tm*.py (pol-git-sync's
@@ -115,14 +131,19 @@ def _warn(key, text):
 # ---------------------------------------------------------------------------
 # names: the roster TM itself draws, then the accounts DB, read-only
 # ---------------------------------------------------------------------------
-def roster_names():
+def _roster_section(key):
+    """One map out of tmroom's published tm-roster.json, or {}."""
     path = os.environ.get("POL_TM_ROSTER_FILE") or os.path.join(data_dir(), "tm-roster.json")
     try:
         with open(path, encoding="utf-8") as fh:
             d = json.load(fh) or {}
-        return {str(k): str(v) for k, v in (d.get("names") or {}).items() if v}
+        return {str(k): str(v) for k, v in (d.get(key) or {}).items() if v}
     except (OSError, ValueError, AttributeError):
         return {}
+
+
+def roster_names():
+    return _roster_section("names")
 
 
 def member_names(members, ttl=60.0):
@@ -213,21 +234,24 @@ def collection_members():
                   key=lambda m: (not m.isdigit(), int(m) if m.isdigit() else 0, m))
 
 
-def live_standings(members, names):
-    """THIS WEEK SO FAR: everyone who has played, by the VS. Rating their
-    record earns now (tmrank.stats_of, the one formula), then this week's
-    prize money. Not what the game shows until the next publish."""
+def live_standings(members, names, now=None):
+    """THIS WEEK SO FAR: who the next publish's Top 30 would rank -- played
+    this week and has the minimum games (tmrank._eligible, the publish's own
+    rule; with no floor a 1-game player topped it) -- by the VS.
+    Rating their record earns now (tmrank.stats_of, the one formula), then
+    this week's prize money. `games` is this week's count. Not what the game
+    shows until the next publish."""
+    since = tmrank.week_start(now)
     out = []
     for m in members:
         data = tmrank.collection_of(m, resource_dir())
-        blk = data.get("rank") if isinstance(data.get("rank"), dict) else {}
-        try:
-            games = int(blk.get("games") or 0)
-        except (TypeError, ValueError):
-            games = 0
-        if games <= 0:
-            continue
         st = tmrank.stats_of(data)
+        if st["games"] <= 0 or not tmrank._eligible(st, 3, since):
+            continue
+        # None = played this week before the week counter existed (the first
+        # week only): the career count is the best there is
+        games = tmrank.week_games_of(data.get("rank"), now)
+        games = st["games"] if games is None else games
         name = HIDDEN if st["hide_name"] else (names.get(m) or "")
         out.append({"member": m, "name": name, "games": games,
                     "rating": st["rating"], "prize": st["prize_week"],
@@ -455,6 +479,139 @@ def face_png(fid):
     return png
 
 
+# ---------------------------------------------------------------------------
+# other players' portraits BY WHO THEY ARE, for a phone client: it knows a
+# player by the POL-ID TM calls them (a <PD> row's value 0, /MLID=, /NN=) or
+# by the name it draws -- never by member id, which nothing public carries.
+# ---------------------------------------------------------------------------
+#: /faces.json's batch cap
+FACE_BATCH_MAX = 50
+#: a handle name is at most 15 characters (the <DE> name field's width)
+FACE_NAME_MAX = 15
+#: a lookup goes stale when a player picks a new portrait: five minutes
+FACE_LOOKUP_CACHE = "public, max-age=300"
+FACE_CORS = {"Access-Control-Allow-Origin": "*"}
+_FACE_BY_NAME = {"t": 0.0, "map": {}}
+
+
+def norm_pol_id(text):
+    """A TM POL-ID as tmroom.note_pol_id stores it (16 upper-case hex digits;
+    a leading 0x is allowed), or None. Exactly 16 digits, never all zero."""
+    text = str(text or "")
+    if text[:2] in ("0x", "0X"):
+        text = text[2:]
+    if len(text) != 16 or any(c not in "0123456789abcdefABCDEF" for c in text):
+        return None
+    text = text.upper()
+    return None if text == "0" * 16 else text
+
+
+def norm_face_name(text):
+    """A name to look up: 1..15 printable ASCII characters, else None."""
+    text = str(text or "")
+    if not 0 < len(text) <= FACE_NAME_MAX or not text.strip():
+        return None
+    if any(not " " <= c <= "~" for c in text):
+        return None
+    return text
+
+
+def members_by_pol_id(pol_ids):
+    """{POL-ID: member id} from tmroom's published `polids` map (the id each
+    member sent in @Init=/NN=, in the file roster_names reads). No tmroom
+    import: the board stays a reader."""
+    want = set(pol_ids)
+    out = {}
+    for mid, pid in _roster_section("polids").items():
+        pid = norm_pol_id(pid)
+        if pid in want and mid.isdigit():
+            out.setdefault(pid, int(mid))
+    return out
+
+
+def members_by_name(names, ttl=60.0):
+    """{name: member id} -- the TM roster's name first (what TM draws), then
+    accounts.db's handle names, case-insensitively, through the read-only URI
+    and bound parameters only. Cached `ttl` s, misses included."""
+    now = time.time()
+    with _NAMES_LOCK:
+        if now - _FACE_BY_NAME["t"] >= ttl or len(_FACE_BY_NAME["map"]) > 4096:
+            _FACE_BY_NAME.update(t=now, map={})
+        cached = dict(_FACE_BY_NAME["map"])
+    out, want = {}, []
+    for n in names:
+        if n.lower() in cached:
+            if cached[n.lower()]:
+                out[n] = cached[n.lower()]
+        else:
+            want.append(n)
+    if not want:
+        return out
+    roster = {}
+    for mid, nm in roster_names().items():
+        if mid.isdigit():
+            roster.setdefault(nm.lower(), int(mid))
+    found, rest = {}, []
+    for n in want:
+        if n.lower() in roster:
+            found[n.lower()] = roster[n.lower()]
+        else:
+            rest.append(n)
+    if rest:
+        try:
+            conn = sqlite3.connect("file:%s?mode=ro" % accounts_path(), uri=True, timeout=5)
+            try:
+                for n in rest:
+                    row = conn.execute(
+                        "SELECT member_id FROM handle WHERE handle_name = ? COLLATE NOCASE"
+                        " ORDER BY is_primary DESC, id ASC LIMIT 1", (n,)).fetchone()
+                    found[n.lower()] = int(row[0]) if row and row[0] else 0
+            finally:
+                conn.close()
+        except sqlite3.Error as e:
+            _warn("facenames", "cannot read handle names from %s (%s)" % (accounts_path(), e))
+    with _NAMES_LOCK:
+        for k, mid in found.items():           # a failed read caches nothing
+            _FACE_BY_NAME["map"][k] = mid
+    for n in want:
+        if found.get(n.lower()):
+            out[n] = found[n.lower()]
+    return out
+
+
+def faces_for(kind, keys):
+    """{key: face id, 0 = unknown or none} for already-validated keys;
+    kind "nn" (POL-IDs) or "name"."""
+    mids = members_by_pol_id(keys) if kind == "nn" else members_by_name(keys)
+    faces = face_ids(set(mids.values())) if mids else {}
+    return {k: (int(faces.get(mids[k], 0) or 0) if k in mids else 0) for k in keys}
+
+
+def _face_keys(query, batch):
+    """(kind, [normalised keys], error text or None) from ?nn= / ?name=. One
+    kind per request; comma-separated when `batch` (a name has no comma)."""
+    kinds = [k for k in ("nn", "name") if k in query]
+    if len(kinds) != 1:
+        return None, [], "give exactly one of nn= or name="
+    kind = kinds[0]
+    raw = query.get(kind) or []
+    cap = FACE_BATCH_MAX if batch else 1
+    if batch:
+        raw = [p for v in raw for p in v.split(",") if p != ""]
+    if not raw or len(raw) > cap:
+        return kind, [], "1..%d %s values" % (cap, kind)
+    norm = norm_pol_id if kind == "nn" else norm_face_name
+    keys = []
+    for v in raw:
+        k = norm(v)
+        if k is None:
+            return kind, [], ("nn is 16 hex digits" if kind == "nn"
+                              else "name is 1..%d printable ASCII characters" % FACE_NAME_MAX)
+        if k not in keys:
+            keys.append(k)
+    return kind, keys, None
+
+
 def watch_enrich(tables):
     """What the page shows that the publisher does not know: each VS. COM
     opponent's own name and portrait (PlPrm.BIN / gW080, baked into
@@ -537,7 +694,7 @@ def snapshot(args=None, now=None):
                      "rows": rows or []})
     members = collection_members()
     names = member_names(members)
-    live = live_standings(members, names)
+    live = live_standings(members, names, now)
     tabs.append({"id": 5, "kind": "live", "name": captions[5], "published": False,
                  "rows": live})
     auc = auction(now)
@@ -849,7 +1006,11 @@ def route(path, query, args):
     and /card.png?id=&a= (a card on its base with arrow mask a -- the bot's
     listing posts show it by URL), and the watching page: /watch, and
     /watch.json?t=<room>-<table> (one match, "state": null when it is not
-    shown -- an answer, not a 404) or /watch.json alone (the list)."""
+    shown -- an answer, not a 404) or /watch.json alone (the list).
+    Other players' portraits for a phone client, CORS-open: /face.png?nn=
+    <16-hex POL-ID> or ?name=<handle> (404 = unknown or no portrait), and
+    /faces.json?nn=a,b,c or ?name=a,b -> {key: face id, 0 = none}, the id
+    /face.png?id= draws. A request with neither keeps ?id='s old answers."""
     if path in ("/watch", "/watch/"):
         return 200, WATCH_PAGE, "text/html; charset=utf-8", "no-store"
     if path == "/watch.json":
@@ -861,6 +1022,22 @@ def route(path, query, args):
             body = {"id": tid, "state": tables.get(tid)}
         return (200, json.dumps(body, separators=(",", ":")),
                 "application/json; charset=utf-8", "no-store")
+    if path == "/face.png" and ("nn" in query or "name" in query):
+        kind, keys, err = _face_keys(query, batch=False)
+        if err:
+            return 400, err, "text/plain", "no-store", FACE_CORS
+        fid = faces_for(kind, keys)[keys[0]]
+        png = face_png(fid) if 0 < fid < 1 << 16 else None
+        if png is None:
+            return 404, "no such portrait", "text/plain", FACE_LOOKUP_CACHE, FACE_CORS
+        return 200, png, "image/png", FACE_LOOKUP_CACHE, FACE_CORS
+    if path == "/faces.json":
+        kind, keys, err = _face_keys(query, batch=True)
+        if err:
+            return (400, json.dumps({"error": err}), "application/json; charset=utf-8",
+                    "no-store", FACE_CORS)
+        return (200, json.dumps(faces_for(kind, keys), separators=(",", ":")),
+                "application/json; charset=utf-8", FACE_LOOKUP_CACHE, FACE_CORS)
     if path == "/face.png":
         try:
             fid = int((query.get("id") or [""])[0])
@@ -1381,7 +1558,8 @@ html,body{margin:0;height:100%;overflow:hidden;background:#07080a}
 .card img.rotarrow{position:absolute;transform-origin:50% 100%}
 .card img.rotglow,img.plhl{position:absolute;mix-blend-mode:plus-lighter;animation:pulse2 1.675s ease-in-out infinite}
 @keyframes pulse2{0%,100%{opacity:0}50%{opacity:1}}
-.rl{position:absolute;inset:0;z-index:18}
+/* above the dark overlay (.gsov, 19): at 18 the reel sat UNDER it, dimmed */
+.rl{position:absolute;inset:0;z-index:20}
 .rl img,.rl .rlp{position:absolute}
 .rlp .t{color:#ecd6be;text-shadow:1px 1px 0 #121212}
 .pop{position:absolute;z-index:9;white-space:nowrap;font:24px "TMTitle",Georgia,serif;color:#ffd86a;-webkit-text-stroke:1px #3a1804;text-shadow:0 2px 3px rgba(0,0,0,.8);transform:translate(-50%,-50%) scale(.3);opacity:0;transition:transform .3s cubic-bezier(.2,1.5,.4,1),opacity .3s}
@@ -2198,7 +2376,9 @@ async function play(st){
       }
       stopA(); stopD();
       if (gen !== GEN) return;
-      const loser = b.win === 'att' ? b.att : b.win === 'def' ? b.def : null;
+      // `win` names the side that WON (tetramaster.py _watch_battle: 'att' when
+      // the attacker wins), so the attacker loses on 'def'
+      const loser = b.win === 'att' ? b.def : b.win === 'def' ? b.att : null;
       if (loser !== null){
         const winTile = loser === b.att ? b.def : b.att, winner = CARDS[winTile] ? CARDS[winTile].c.owner : seat;
         (loser === b.att ? na : nd).set(-1);

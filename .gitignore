@@ -4,6 +4,8 @@ services/tmdata/*.bin
 services/tmdata/.staged-captures
 services/boardart/tm/*.png
 services/boardart/tm/.staged-art
+# portrait sheets baked from your own install (tools/tm_boardart_bake.py --faces)
+services/boardart/faces/
 __pycache__/
 *.pyc
 scrub-report.txt

@@ -53,7 +53,8 @@ def setup(tmp):
     for i, n in enumerate(NAMES):
         with open(os.path.join(res, "%d.tm_collection.json" % (i + 1)), "w") as fh:
             json.dump({"rank": {"games": 3 + i, "score_total": 40 - 2 * i, "tiles_total": 50,
-                                "prize_week": 100 * i}}, fh)
+                                "prize_week": 100 * i, "last_played": now - 60,
+                                "week_of": tmrank.week_start(now), "week_games": 1 + i % 4}}, fh)
     with open(os.environ["POL_TM_ROSTER_FILE"], "w") as fh:
         json.dump({"names": {str(i + 1): n for i, n in enumerate(NAMES)}}, fh)
     recs = []

@@ -104,7 +104,7 @@ class AutoNet(FakeNet):
             self.n += 1
             self.script = [(200, {"id": "m%d" % self.n})]
         if not self.script and req.get_method() == "GET" and self.channel:
-            self.script = [(200, {"channel_id": self.channel})]
+            self.script = [(200, {"channel_id": self.channel, "guild_id": "G0"})]
         return super().__call__(req, timeout)
 
     def since(self, k):
@@ -167,17 +167,29 @@ def setup(tmp):
     files = {tmrank.path_for(rid): tmrank.build_list(rid, players) for rid in tmrank.LISTS}
     files[tmrank.RKDATA] = tmrank.build_rkdata({0: 5, 5: 5, 1: 5, 2: 5}, NEXT)
     tmrank.write_store(files)
-    # collections: 1 and 3 have played, 2 has not, 4 is named only by the roster
+    # collections: 1 and 3 have played, 2 has not, 4 is named only by the roster;
+    # 5 is the best rating on file but has not played this week, 6 has one game
+    week = tmrank.week_start(NOW)
     for m, blk in ((1, {"games": 10, "score_total": 90, "tiles_total": 100, "tiled_games": 10,
-                        "prize_week": 700}),
+                        "prize_week": 700, "last_played": NOW - 3600,
+                        "week_of": week, "week_games": 3}),
                    (2, {"games": 0}),
-                   (3, {"games": 4, "score_total": 24, "tiles_total": 40, "tiled_games": 4}),
-                   (4, {"games": 1, "score_total": 8, "tiles_total": 16, "tiled_games": 1,
-                        "prize_week": 50})):
+                   (3, {"games": 6, "score_total": 36, "tiles_total": 60, "tiled_games": 6,
+                        "last_played": week + 60}),
+                   (4, {"games": 5, "score_total": 40, "tiles_total": 80, "tiled_games": 5,
+                        "prize_week": 50, "last_played": NOW - 60,
+                        "week_of": week, "week_games": 1}),
+                   (5, {"games": 20, "score_total": 300, "tiles_total": 320, "tiled_games": 20,
+                        "last_played": week - 60, "week_of": week - 7 * 86400,
+                        "week_games": 9}),
+                   (6, {"games": 1, "score_total": 16, "tiles_total": 16, "tiled_games": 1,
+                        "prize_week": 900, "last_played": NOW - 60,
+                        "week_of": week, "week_games": 1})):
         with open(os.path.join(res, "%d%s" % (m, tmrank.COLLECTION_SUFFIX)), "w") as fh:
             json.dump({"cards": [], "money": 100, "rank": blk}, fh)
     with open(os.environ["POL_TM_ROSTER_FILE"], "w") as fh:
-        json.dump({"names": {"1": "Lex", "2": "Quinn", "4": "Star*Man"}}, fh)
+        json.dump({"names": {"1": "Lex", "2": "Quinn", "4": "Star*Man", "5": "Idle",
+                             "6": "OneGame"}}, fh)
     # the auction: two sellers' stores
     exhibit = lambda m: os.path.join(res, "%d.U_g_TM0_EXHIBITLIST.bin" % m)   # noqa: E731
     with open(exhibit(1), "wb") as fh:
@@ -559,7 +571,8 @@ def bot_checks(tmp, boardtm, polboards, snap, args):
             return err.code, None
 
     def cmd(sub, perms):
-        return {"type": 2, "channel_id": "555", "member": {"permissions": perms},
+        return {"type": 2, "channel_id": "555", "guild_id": "G1",
+                "member": {"permissions": perms},
                 "data": {"name": "tmboard", "options": [{"type": 1, "name": sub}]}}
     try:
         check("an unsigned request is refused (401)", post({"type": 1}, sign=False)[0] == 401)
@@ -585,7 +598,7 @@ def bot_checks(tmp, boardtm, polboards, snap, args):
         st, r = post(cmd("auction", str(0x20)))
         check("/tmboard auction (Manage Server) moves the auction HERE",
               r["data"]["flags"] == 64 and "<#555>" in r["data"]["content"]
-              and polboards.bot_channels()["chosen"]["tm_auction"] == "555", r)
+              and polboards.bot_channels()["chosen"]["tm_auction"] == {"G1": "555"}, r)
         st, r = post(cmd("status", "0"))
         check("/tmboard status says where each feed posts (anyone may ask)",
               "auction**: <#555>" in r["data"]["content"]
@@ -616,7 +629,8 @@ def bot_checks(tmp, boardtm, polboards, snap, args):
     check("...and ONE rankings post goes up AS THE BOT in the webhook's channel",
           len(posts) == 1 and posts[0][0] == "https://discord.com/api/v10/channels/77/messages"
           and posts[0][2] == "Bot BOTTOKEN" and b"tm:view:0:0" in posts[0][1]
-          and b"tm:view:5:0" in posts[0][1] and polboards.bot_channels()["posted"]["tm"] == "77",
+          and b"tm:view:5:0" in posts[0][1]
+          and polboards.bot_channels()["posted"]["tm"] == {"G0": "77"},
           posts and posts[0][0])
     polboards._note_channel("chosen", "tm", "88")
     net2 = AutoNet(channel="77")
@@ -794,8 +808,13 @@ def main():
 
     print("this week so far (live)")
     live = tabs[5]["rows"]
-    check("only members who have played, best VS. Rating first",
+    check("only members who played this week with the minimum games, best VS. Rating first",
           [r["member"] for r in live] == ["1", "3", "4"], live)
+    check("...not the best career rating idle since last week, not a 1-game 4.00",
+          not {"5", "6"} & {r["member"] for r in live}
+          and boardtm.tmrank.min_games() == 5, live)
+    check("games = this week's count; before the counter existed, the career count",
+          [r["games"] for r in live] == [3, 6, 1], live)
     check("names: the TM roster first, then accounts.db's primary handle (read-only)",
           [r["name"] for r in live] == ["Lex", "Elena", "Star*Man"], live)
     check("the rating is tmrank's one formula", live[0]["rating"] == 370
@@ -831,7 +850,7 @@ def main():
           == [("sold", "Lex"), ("bid", "Corvin"), ("bid", "Quinn"), ("listed", "Lex")]
           and len(a["activity"]) == 8, a["activity"])
     check("matches in progress come from the live marker", s["matches_live"] == 2
-          and s["players"] == 4)
+          and s["players"] == 6)
 
     if not os.path.exists(os.path.join(boardtm.ART_DIR, "backdrop.png")):
         print("[SKIP] the renders: services/boardart/tm holds no baked art "
