@@ -33,6 +33,14 @@ services:
       # an event window (unix seconds); -1/-1 = no event, the default
       POL_TM_EVENT_START: "${POL_TM_EVENT_START:--1}"
       POL_TM_EVENT_END: "${POL_TM_EVENT_END:--1}"
+      # TOURNAMENTS: the members who see the extra `ENAAB<name>` zone in b/g/ZL
+      # that opens the Event List (comma list of member ids, or `*`); empty =
+      # no tournament door, the default. The zone's name and its room id.
+      POL_TM_EVENT_ZONE_MEMBERS: "${POL_TM_EVENT_ZONE_MEMBERS:-}"
+      POL_TM_EVENT_ZONE_NAME: "${POL_TM_EVENT_ZONE_NAME:-Tournament Hall}"
+      POL_TM_EVENT_ROOM_ID: "${POL_TM_EVENT_ROOM_ID:-81}"
+      # a fixed daily UTC window "HH:MM-HH:MM" instead of the event calendar
+      POL_TM_EVENT_WINDOW: "${POL_TM_EVENT_WINDOW:-}"
 
   authsess:
     image: crystalmaster:latest
@@ -42,6 +50,13 @@ services:
       POL_TM_ZONE_HOST: "${POL_TM_ZONE_HOST:-}"
       POL_TM_EVENT_START: "${POL_TM_EVENT_START:--1}"
       POL_TM_EVENT_END: "${POL_TM_EVENT_END:--1}"
+      POL_TM_EVENT_ZONE_MEMBERS: "${POL_TM_EVENT_ZONE_MEMBERS:-}"
+      POL_TM_EVENT_ZONE_NAME: "${POL_TM_EVENT_ZONE_NAME:-Tournament Hall}"
+      POL_TM_EVENT_ROOM_ID: "${POL_TM_EVENT_ROOM_ID:-81}"
+      POL_TM_EVENT_WINDOW: "${POL_TM_EVENT_WINDOW:-}"
+      # the tournament's entry card picker: 1 = everyone, or a member list
+      POL_TM_EVENT_DECK_PICK: "${POL_TM_EVENT_DECK_PICK:-0}"
+      POL_TM_EVENT_DECK_PICK_MEMBERS: "${POL_TM_EVENT_DECK_PICK_MEMBERS:-}"
 
   # THE WEEKLY TALLY. Tetra Master's ranking lists are rebuilt once a week
   # (Sunday 00:05 UTC, as the original service did), out of band: the row

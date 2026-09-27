@@ -255,6 +255,10 @@ def _roster_delta_reply(payload):
             tetramaster._trade_reserve_tick(member)
         except Exception:
             pass
+        try:
+            tetramaster.event_tick(member)
+        except Exception:
+            pass
         # RECORD-FIRST, exactly as `_ptl_with_live_roster` does and for a
         # measured reason: Fox's re-joined session carried `member_id 0` in the
         # registry row (rooms-live.json `who=[.., (0, None)]`), so the
@@ -1576,6 +1580,11 @@ def _roster_note(payload, tag):
                 except Exception:
                     pass
             chan = tmroom.room_of(member_id) if member_id else None
+            if member_id:
+                try:
+                    tetramaster.event_left_room(member_id)
+                except Exception:
+                    pass
             if member_id and tmroom.forget_member(member_id):
                 log("authserv",
                     f"  roster: <PC> from member {member_id} -- dropped from "
@@ -1588,6 +1597,12 @@ def _roster_note(payload, tag):
         # against a JOIN 1.5 s later), so requiring one threw away every room
         # entry. The record carries its own room at value 9.
         _roster_note_guid(member_id)
+        # The tournament matchmaker reads the event status from every
+        # <DE>/<PD> (listed members only; see tetramaster.note_event_status).
+        try:
+            tetramaster.note_event_status(member_id, values)
+        except Exception as exc:
+            log("authserv", f"  roster: event status not noted ({exc!r})")
         if tmroom.note_member(member_id, values):
             chan = tmroom.room_of(member_id) or "?"
             log("authserv",
@@ -3853,6 +3868,7 @@ def _ptl_with_live_roster(path, data):
             # what we hold is still the authored fixture and its `+0x40` is an
             # authored constant. Same treatment as "no room at all".
             return _ptl_unknown_base(data)
+        built = _ptl_event_hosts(chan, built)
         n = struct.unpack_from("<i", built, tmroom.MEMBER_COUNT_OFF)[0]
         t = struct.unpack_from("<i", built, tmroom.TABLE_COUNT_OFF)[0]
         log("lobby", f"  b/g/PTL: built from the LIVE roster of {chan} FOR "
@@ -4049,10 +4065,31 @@ def _tm_template_blob(path):
     # services/tmfixtures.py -- the layouts the client's readers dictate plus
     # this server's own zone/room/table content. The live patchers on the way
     # out are unchanged.
+    if path == "b/g/TM0EventMemberList" and _tm_event_test_member():
+        # THE RANKING, FROM PLAY: tetramaster scores each tournament game into
+        # tmeventstate; the client reads its own row on re-entry (score ->
+        # status chars 14-15 -> everyone's board, mission ticks).
+        try:
+            import tmeventstate
+            ws, _we = tetramaster.event_window()
+            blob = tmeventstate.member_list_blob(ws, tmroom.pol_id_of,
+                                                 tmroom.name_of)
+            log("lobby", f"  3:0 {path!r}: tournament standings, "
+                         f"{struct.unpack_from('<I', blob, 4)[0]} row(s)")
+            return blob
+        except Exception as exc:
+            log("lobby", f"  3:0 {path!r}: standings not built ({exc!r})")
     if path in ("b/g/TM0EventList", "b/g/TM0EventDataList", "b/g/TM0EventMemberList"):
-        if not _tm_event_active():
+        # The tournament members (POL_TM_EVENT_ZONE_MEMBERS) also get the DATA
+        # list: the event room loader needs its count >= 1 (+0x54) and the
+        # fixture carries exactly one record.
+        if not _tm_event_active() and not (
+                path == "b/g/TM0EventDataList" and _tm_event_test_member()):
             return None
-        return tmfixtures.template(path)
+        data = tmfixtures.template(path)
+        if data is not None and path == "b/g/TM0EventDataList"                 and _tm_event_test_member():
+            data = _tm_event_missions(data)
+        return data
     if path == _EXHIBIT_LIST_PATH:
         return None                         # per-member store only; no fixture
     data = tmfixtures.template(path)
@@ -4289,6 +4326,291 @@ def _zl_name_for_build(path, data):
                      f"{moved} zone record(s) (the console reads it at +0x0E, "
                      f"the PC at +0x11; POL_TM_ZL_NAME_PS2=0 disables)")
     return bytes(buf)
+
+
+#: THE TOURNAMENT DOOR IS A ZONE NAME. Each `b/g/ZL`
+#: name is `EN` + three letters + the display name, and the client stores each
+#: letter minus 'A' in the zone struct: the fifth byte lands at +0x32
+#: (TMaster.pex 20040908 0x437FD0) and zone select branches on it (0x2DA7B0):
+#: 1 builds the Event List (cmd 0x0300032A) instead of the room list. Every zone
+#: we author is `ENAAA...`, which is why no event screen ever opened.
+#:
+#: This appends ONE `ENAAB<name>` zone, cloned from record 0 so the dial host and
+#: every unmeasured byte stay as served, for the members in
+#: POL_TM_EVENT_ZONE_MEMBERS only (comma list, or `*`). Empty = off, the default.
+#: Its zone id is always its own slot (see below), so its room list is
+#: `b/g/RL%03d` of that slot.
+#: A console that takes the door logs `3:0 'b/g/TM0EventList'` in lobby.log.
+_ZL_HDR, _ZL_REC, _ZL_COUNT_OFF, _ZL_MAX = 0x48, 0x40, 0x40, 32
+_ZL_F_NAME, _ZL_F_HOST, _ZL_F_ID = 0x0C, 0x2C, 0x3C
+#: member id -> the zone id (= slot) its event zone was last served under.
+_EVENT_ZONE_ID = {}
+
+
+def _tm_event_test_member():
+    """True when this session's member is in POL_TM_EVENT_ZONE_MEMBERS."""
+    spec = os.environ.get("POL_TM_EVENT_ZONE_MEMBERS", "").strip()
+    if not spec:
+        return False
+    allowed = {s.strip() for s in spec.split(",") if s.strip()}
+    return "*" in allowed or str(_session_get("member_id") or "") in allowed
+
+
+#: THE MISSIONS. `b/g/TM0EventDataList` +0x12FC is a u32 mask (bit t turns on
+#: mission type t; the first three set bits are Missions 1-3) and +0x1300 + t is
+#: type t's count. Types: 0 combos, 1 perfect wins, 2 firsts in a row, 3
+#: Rotating Block flips, 4 ties, 5 act first and place 1st, 6 Chance Block
+#: flips, 7 wins over a Defense Up card (not counted). POL_TM_EVENT_MISSIONS is
+#: `type:count,...`; the default is three we can tell apart on screen.
+_EVD_MASK_OFF, _EVD_COUNT_OFF = 0x12FC, 0x1300
+
+
+def _tm_event_missions(data):
+    buf = bytearray(data.ljust(_EVD_COUNT_OFF + 8, b"\x00"))
+    mask = 0
+    try:
+        active = tetramaster.event_missions()
+    except Exception:
+        active = [(1, 1), (2, 2), (4, 1)]
+    for t, n in active:
+        mask |= 1 << t
+        buf[_EVD_COUNT_OFF + t] = n
+    struct.pack_into("<I", buf, _EVD_MASK_OFF, mask)
+    return bytes(buf[:max(len(data), _EVD_COUNT_OFF + 8)])
+
+
+#: MORE EVENT HOSTS, FEWER BOUNCES. The event join picks an 'E' table row at
+#: random with trunc((N+1) * rand() / 32768) -- an index 0..N, so with N 'E'
+#: rows it misses 1 time in N+1 and silently bounces the player back to the
+#: Event List (PC 0x76258). With the fixture's one
+#: host that is 50%. In an event room, for listed members, table rows from
+#: `_PTL_EVENT_HOST_FROM` on become copies of the host row (same id, so every
+#: pick reaches the same @EInitReq handler). Rows before it stay tables: the
+#: matchmaker seats a pair at #TM0T001.
+_PTL_EVENT_HOST_FROM = 6    # table slot 6 = #TM0T005 in the fixture
+
+
+def _ptl_event_hosts(chan, blob):
+    if not _tm_event_test_member():
+        return blob
+    try:
+        room = tmroom.room_id_for(chan)
+        zid = _EVENT_ZONE_ID.get(str(_session_get("member_id") or ""))
+        if zid is None or (room & 0xFFFF) != int(
+                os.environ.get("POL_TM_EVENT_ROOM_ID", "81"), 0):
+            return blob
+        n = struct.unpack_from("<i", blob, tmroom.TABLE_COUNT_OFF)[0]
+        rows = [blob[tmroom.TABLE_OFF + i * tmroom.TABLE_REC:
+                     tmroom.TABLE_OFF + (i + 1) * tmroom.TABLE_REC] for i in range(n)]
+        host = next((r for r in rows if tmroom.decode_table(r)[6][:1] == "E"), None)
+        if host is None:
+            return blob
+        buf = bytearray(blob)
+        swapped = 0
+        for i in range(_PTL_EVENT_HOST_FROM, n):
+            o = tmroom.TABLE_OFF + i * tmroom.TABLE_REC
+            if o + tmroom.TABLE_REC > len(buf):
+                break
+            buf[o:o + tmroom.TABLE_REC] = host
+            swapped += 1
+        if swapped:
+            log("lobby", f"  b/g/PTL: {chan}: {swapped} extra event host row(s) "
+                         f"-> {swapped + 1} 'E' rows, the join now misses 1 in "
+                         f"{swapped + 2} instead of 1 in 2")
+        return bytes(buf)
+    except Exception as exc:
+        log("lobby", f"  b/g/PTL: event host rows not added ({exc!r})")
+        return blob
+
+
+def _zl_event_zone(path, data):
+    if path != "b/g/ZL":
+        return data
+    spec = os.environ.get("POL_TM_EVENT_ZONE_MEMBERS", "").strip()
+    if not spec:
+        return data
+    member = str(_session_get("member_id") or "")
+    allowed = {s.strip() for s in spec.split(",") if s.strip()}
+    if "*" not in allowed and member not in allowed:
+        return data
+    if len(data) < _ZL_HDR + _ZL_REC:
+        return data
+    buf = bytearray(data)
+    n = min(struct.unpack_from("<I", buf, _ZL_COUNT_OFF)[0],
+            (len(buf) - _ZL_HDR) // _ZL_REC)
+    if n < 1 or n >= _ZL_MAX:
+        return data
+    names = [bytes(buf[_ZL_HDR + i * _ZL_REC + _ZL_F_NAME:
+                       _ZL_HDR + i * _ZL_REC + _ZL_F_HOST]) for i in range(n)]
+    # Only a TM-shaped list (`EN` + three letters), and never twice.
+    if not all(nm[:2] == b"EN" and len(nm) > 5 for nm in names):
+        return data
+    if any(nm[4:5] != b"A" for nm in names):
+        return data
+    # WARNING: THE ZONE ID IS THE ZONE'S OWN SLOT. The client dials
+    # ZLrecord[zone_id].host, so an id past the populated rows dials an empty
+    # slot: TRM-8196-37130, live 2026-09-26 with id 9 at slot 2.
+    zid = n
+    if any(buf[_ZL_HDR + i * _ZL_REC + _ZL_F_ID] == zid for i in range(n)):
+        log("lobby", f"  3:0 {path!r}: event zone NOT added -- zone id {zid} "
+                     f"(its slot) is already used by another row")
+        return data
+    _EVENT_ZONE_ID[member] = zid
+    title = os.environ.get("POL_TM_EVENT_ZONE_NAME", "Tournament Hall")
+    name = (b"ENAAB" + title.encode("latin-1", "replace"))[:_ZL_F_HOST - _ZL_F_NAME - 1]
+    src = _ZL_HDR
+    dst = _ZL_HDR + n * _ZL_REC
+    buf[dst:dst + _ZL_REC] = buf[src:src + _ZL_REC]
+    struct.pack_into("<II", buf, dst, 0, 0)             # players, rooms
+    buf[dst + _ZL_F_NAME:dst + _ZL_F_HOST] = name.ljust(_ZL_F_HOST - _ZL_F_NAME, b"\x00")
+    buf[dst + _ZL_F_ID] = zid
+    struct.pack_into("<I", buf, _ZL_COUNT_OFF, n + 1)
+    log("lobby", f"  3:0 {path!r}: EVENT ZONE added for member {member}: "
+                 f"{name.decode('latin-1')!r} id {zid} (zone {n + 1} of {n + 1})")
+    return bytes(buf)
+
+
+#: THE EVENT ZONE'S ROOM LIST. Entering an event zone still loads the zone's
+#: normal `b/g/RL%03d` (CEventSelect -> CGetEventListWithError -> CIRCOpen ->
+#: CGetRoomList), and the Event List is those rooms JOINED to `TM0EventList`:
+#: a row matches a record whose +0x10 is the zone name and +0x30 the room name
+#: (static reading of the PS2 client). No such file exists for our event zone
+#: id, so serve ONE room cloned from this subject's zone-0 list, renamed. Room
+#: id, name and channel below are OURS and unmeasured; only the list's shape is
+#: the client's.
+_RL_HDR, _RL_REC, _RL_COUNT_OFF = 0x48, 200, 0x40
+_RL_F_NAME, _RL_F_NAME_END, _RL_F_CHAN, _RL_F_CHAN_END = 0x2A, 0x86, 0xB8, 0xC8
+
+
+#: THE EVENT LIST ROW. `b/g/TM0EventList` (0x2C08 B = 8 + 32 * 0x160) as the
+#: PS2 20040908 reader CGetEventHelp 0x344D10 uses it: count u32
+#: at +0x04, records from +0x08. A room row lights up only when a record's
+#: +0x10 equals the zone name and +0x30 the room name; +0x00 is the mode (0 =
+#: event, 1 = table room); +0x08 / +0x0C are second counts the window shows as
+#: h:m:s (Start / End Time); +0x50 is the text it draws. +0x04..+0x07 are four
+#: u8s the window also shows, UNMEASURED: we send the date as yy, mm, dd, 0.
+_EVL_TOTAL, _EVL_HDR, _EVL_REC = 0x2C08, 0x08, 0x160
+
+
+def _tm_event_info():
+    try:
+        return tetramaster.event_info()
+    except Exception:
+        return {}
+
+
+def _tm_event_room_name():
+    """The Event List's Event Name column IS the event room's name, and the
+    TM0EventList record keys on it: the calendar event's name, so the list
+    reads "Holiday Cup" on Dec 24. POL_TM_EVENT_ROOM_NAME overrides."""
+    return (os.environ.get("POL_TM_EVENT_ROOM_NAME")
+            or str(_tm_event_info().get("name") or "Chocobo Cup"))[:30]
+
+
+def _tm_event_list(path, n):
+    if path != "b/g/TM0EventList":
+        return None
+    spec = os.environ.get("POL_TM_EVENT_ZONE_MEMBERS", "").strip()
+    if not spec:
+        return None
+    member = str(_session_get("member_id") or "")
+    allowed = {s.strip() for s in spec.split(",") if s.strip()}
+    if "*" not in allowed and member not in allowed:
+        return None
+
+    def secs(name, default):
+        v = os.environ.get(name, default)
+        try:
+            h, m = (int(x) for x in v.split(":")[:2])
+            return h * 3600 + m * 60
+        except ValueError:
+            return 0
+
+    buf = bytearray(_EVL_TOTAL)
+    struct.pack_into("<I", buf, 0x04, 1)
+    r = _EVL_HDR
+    struct.pack_into("<I", buf, r + 0x00, 0)                 # mode: event
+    # The window the countdown uses (tetramaster.event_window). The date's
+    # month and day are 0-BASED: 26/9/26 drew "2026.10.27" live 2026-09-26.
+    try:
+        ws, we = tetramaster.event_window()
+    except Exception:
+        ws, we = time.time(), time.time() + 7200
+    t = time.gmtime(ws)
+    buf[r + 0x04:r + 0x08] = bytes((t.tm_year % 100, t.tm_mon - 1,
+                                    t.tm_mday - 1, 0))
+    struct.pack_into("<II", buf, r + 0x08, int(ws % 86400), int(we % 86400))
+    zone = os.environ.get("POL_TM_EVENT_ZONE_NAME", "Tournament Hall")
+    room = _tm_event_room_name()
+    # +0x50 is the ONLY string the reader copies (0x396C0): the Event Guide
+    # text. About 60 characters fit a line (live 2026-09-26: one long line was
+    # cut off), so lines break at '|' -> "\n", as the game's own .BIN text
+    # does; whether this box honours it is the live test. The Event Name
+    # column is the RL ROOM name, not this.
+    title = (os.environ.get("POL_TM_EVENT_TITLE") or _tm_event_info().get("guide")
+             or "Win matches to move your chocobo up the track!|"
+                "Clear the three missions for extra prizes.").replace("|", "\n")
+    for off, width, text in ((0x10, 0x20, zone), (0x30, 0x20, room),
+                             (0x50, _EVL_REC - 0x50, title)):
+        buf[r + off:r + off + width] = text.encode(
+            "latin-1", "replace")[:width - 1].ljust(width, b"\x00")
+    log("lobby", f"  3:0 {path!r}: EVENT LIST for member {member}: {title!r} "
+                 f"in {zone!r}/{room!r} ")
+    return bytes(buf[:n]).ljust(n, b"\x00")
+
+
+def _tm_event_room_list(path, n, subject):
+    if not (path.startswith("b/g/RL") and path[6:].isdigit()):
+        return None
+    spec = os.environ.get("POL_TM_EVENT_ZONE_MEMBERS", "").strip()
+    if not spec:
+        return None
+    member = str(_session_get("member_id") or "")
+    allowed = {s.strip() for s in spec.split(",") if s.strip()}
+    if "*" not in allowed and member not in allowed:
+        return None
+    # The id `_zl_event_zone` gave this member's event zone (its slot). The
+    # zone list is always fetched before a room list, in this same process.
+    zid = _EVENT_ZONE_ID.get(member)
+    if zid is None or int(path[6:], 10) != zid or zid == 0:
+        return None
+    # RAW zone-0 list, not `_resource_blob`: its live-count patch records a
+    # b/g/RL fetch as ENTERING that zone, and this player is entering ours.
+    base = b""
+    try:
+        with open(_resource_read_file("b/g/RL000", subject), "rb") as f:
+            base = f.read()
+    except OSError:
+        base = _tm_template_blob("b/g/RL000") or b""
+    try:
+        _note_zone_presence(zid)
+    except Exception as exc:
+        log("lobby", f"  3:0 {path!r}: zone presence not noted ({exc!r})")
+    if len(base) < _RL_HDR + _RL_REC or struct.unpack_from(
+            "<I", base, _RL_COUNT_OFF)[0] < 1:
+        log("lobby", f"  3:0 {path!r}: event room list NOT built -- no zone-0 "
+                     f"room to clone")
+        return None
+    buf = bytearray(len(base))
+    buf[:_RL_HDR] = base[:_RL_HDR]
+    buf[_RL_HDR:_RL_HDR + _RL_REC] = base[_RL_HDR:_RL_HDR + _RL_REC]
+    struct.pack_into("<I", buf, _RL_COUNT_OFF, 1)
+    r = _RL_HDR
+    try:
+        rid = int(os.environ.get("POL_TM_EVENT_ROOM_ID", "81"), 0)
+    except ValueError:
+        rid = 81
+    struct.pack_into("<I", buf, r, rid)
+    room = _tm_event_room_name()
+    width = _RL_F_NAME_END - _RL_F_NAME
+    buf[r + _RL_F_NAME:r + _RL_F_NAME_END] = room.encode(
+        "latin-1", "replace")[:width - 1].ljust(width, b"\x00")
+    chan = b"#TM0E%03d" % (rid % 1000)
+    buf[r + _RL_F_CHAN:r + _RL_F_CHAN_END] = chan.ljust(
+        _RL_F_CHAN_END - _RL_F_CHAN, b"\x00")
+    log("lobby", f"  3:0 {path!r}: EVENT ROOM LIST for member {member}: one room "
+                 f"{room!r} id {rid} {chan.decode()} (cloned from b/g/RL000)")
+    return bytes(buf[:n]).ljust(n, b"\x00")
 
 
 def _rkdata_for_build(path, data):
@@ -4614,6 +4936,16 @@ class TetraMaster(titles.Title):
     def resource_nodata(self, path, subject):
         return _checkout_empty(path, subject)
 
+    def resource_live(self, path, n, req_pt):
+        # THE TOURNAMENT'S LOBBY LISTS, built per fetch for the members in
+        # POL_TM_EVENT_ZONE_MEMBERS: the event zone's one room, then the
+        # Event List row. None for everyone and everything else.
+        subject = _fetch_subject(req_pt) if _fetch_subject is not None else 0
+        ev = _tm_event_room_list(path, n, subject)
+        if ev is None:
+            ev = _tm_event_list(path, n)
+        return ev
+
     def resource_template(self, path):
         # THE PUBLISHED RANKING TALLY OUTRANKS THE SHIPPED FIXTURE, looked up
         # through the SAME function that answered `<LN>` on the other band.
@@ -4628,6 +4960,7 @@ class TetraMaster(titles.Title):
         data = _ptl_with_live_roster(path, data)
         data = _lobby_counts_live(path, data, subject)
         data = _zone_host_live(path, data)
+        data = _zl_event_zone(path, data)
         data = _zl_name_for_build(path, data)
         data = _auc_counts_live(path, data)
         data = _rkdata_for_build(path, data)
