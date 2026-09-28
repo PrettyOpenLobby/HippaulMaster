@@ -1,5 +1,5 @@
-"""Imports shared by the package's modules, and the optional sibling services (tmauction, tmsave,
-tmprize, tmroll).
+"""Imports shared by the package's modules, and the optional ones (tmauction, tmprize, tmroll,
+tmsave), which are None when the import fails.
 """
 import inspect
 import json

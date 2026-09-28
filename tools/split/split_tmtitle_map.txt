@@ -1,0 +1,76 @@
+# Name map for split_tetramaster.py over services/tmtitle.py: [module] docstring, then the
+# top-level names it owns. A line starting with ~ maps an unnamed statement by the prefix
+# of its first line. Map order is import order and the order of the layout in
+# tmplugin/__init__.py.
+
+[settings] The title's release defaults (set into the environment at import) and where its files are.
+HERE RELEASE_DEFAULTS _k _v POLPRO_SPEC_CANDIDATES
+
+[corenames] The core names the title uses, bound from titles.core at import and again when the core rebinds.
+_CORE_NAMES _rebind
+~_rebind()
+# bound at run time by _rebind():
+log NoPad PRESENCE ROOMS accounts polpro RESOURCE_DIR _game_notice_line _irc_host _session_get _session_sid _sess_member_id _member_content_id _live_rooms _room_of_member _resource_file _resource_read_file _resource_stored _fetch_subject _peer_is_ps2 _mail_mint _member_primary_handle _session_handle_id _self_ip _member_display_name _advertise_configured
+
+[fetches] Declared lengths of Tetra Master's resource fetches (FETCH_PATHLEN) and resource_length.
+PTL_DECLARED _AUCTION_LIST_PATHS _EXHIBIT_LIST_PATH _AUCTION_LIST_REC FETCH_PATHLEN
+resource_length
+
+[roster] The room roster on the auth band: update sequence, deltas, member records, departures and retirement.
+_roster_sequence _roster_sync_presence _roster_delta_reply _roster_note_guid
+_roster_note_departure _roster_retire_stale _roster_retire_on_close _roster_note_room_peer
+_roster_note
+
+[auction] The auction house: listing store, bids, notices, the expiry sweep, the class-A replies and Check Out files.
+_auction_store_file _write_resource _AUCTION_BROWSE_PATH _AUCTION_BIDHIST_PATH
+_auction_bids_file _auction_bids _auction_find _auction_with_bid_counts _auction_all_rows
+_auction_next_id _auction_count_rows _auction_rows _TM_AUCTION_SENDER_GUID _AUCTION_NOTICES
+_notice_fill _auction_notice _auction_sweep _auction_take_listed_card _tm_auction_reply
+_auc_counts_live _CHECKOUT_PATHS _checkout_empty
+
+[rankings] The ranking lists: the class-R reply, the rank list blob and TM0RkData per client build.
+_tm_rank_reply _RANK_LIST_PATH _RANK_LIST_REC _rkdata_for_build _rank_list_blob
+
+[pool] The character pool the client hands over (<CR>), and names and records looked up in it.
+_tm_pool_note _pool_character_name _pool_character
+
+[chat] Tetra Master chat lines: re-broadcast to the room with the sender's name filled in.
+_tm_chat_rebroadcast _tm_chat_fill_name
+
+[envelope] The game envelope (class G on the auth band): notice, which hands each line to the game or answers it.
+notice
+
+[manifests] The service manifests the client loads first (TM0SML, TM0CVML, TM0IML, TM0CQL) and fresh blob defaults.
+_TM_SERVICE_PEER _TM0SML_INIT _TM0CVML_INIT _TM0IML_INIT _TM_COM_HOST _TM0CQL_INIT
+RESOURCE_INIT
+~if _TM0CQL_INIT:
+
+[zones] Zones on the lobby band: occupancy, live player and room counts, the dial host and zone names per build.
+_ZONE_OF _zone_lease _note_zone_presence _zone_occupants _lobby_counts_live _client_host
+_zone_host_live _zl_with_live_host _rl_name_ps2 _zl_name_for_build _ZL_HDR _ZL_REC
+_ZL_COUNT_OFF _ZL_MAX _ZL_F_NAME _ZL_F_HOST _ZL_F_ID
+
+[ptl] b/g/PTL, the room's member and table list, rebuilt from the live roster.
+_PTL_TEMPLATE_SERIAL _ptl_unknown_base _ptl_with_live_roster _PTL_EVENT_HOST_FROM
+_ptl_event_hosts
+
+[savedefaults] A fresh player save's factory header.
+TM_SAVE_PATH _tm_save_defaults
+
+[events] Tournaments on the lobby band: the event zone, its room list, the Event List and the missions mask.
+_tm_event_active _EVENT_ZONE_ID _tm_event_test_member _EVD_MASK_OFF _EVD_COUNT_OFF
+_tm_event_missions _zl_event_zone _RL_HDR _RL_REC _RL_COUNT_OFF _RL_F_NAME _RL_F_NAME_END
+_RL_F_CHAN _RL_F_CHAN_END _EVL_TOTAL _EVL_HDR _EVL_REC _tm_event_info _tm_event_room_name
+_tm_event_list _tm_event_room_list
+
+[templates] The authored lobby blobs shipped with the tree, and how one is found.
+_tm_template_blob
+
+[profile] The member profile fields for content id 2 (card level, title, average rank).
+_TM_CARD_LEVEL _TM_TITLE _TM_AVG_RANK profile_fields
+
+[bandglue] Glue the core used to carry inline: the channel-less PART echo and which band a line arrived on.
+_part_echo _band_role
+
+[plugin] The TetraMaster titles.Title subclass and register(), the hooks the core calls.
+TetraMaster register
