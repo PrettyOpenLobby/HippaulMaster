@@ -67,6 +67,9 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "services"))
+# in the image the modules sit in /app, one level above tools/
+if not os.path.isdir(sys.path[0]):
+    sys.path[0] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 import tmrank                                                    # noqa: E402
 
 FIXTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -388,9 +391,10 @@ def _write_champion(players, ranks, data_dir=None):
     levels 9..11) -- and the save header's 17-byte string at +0x104 seeds the
     same label. This is the Tetra Master "event" the wiki documents: the top
     player's pack in the ordinary Card Shop. The champion is rank 1 of the
-    Top 30 list just published (menu 1, last week's rating). Written to
-    `<POL_DATA_DIR>/tm-champion.json`, read by `tetramaster._champion`.
-    `POL_TM_CHAMPION=0` disables."""
+    Top 30 list just published (menu 1, last week's rating). Written to the
+    `tm_champion` table (one row per week; it was <POL_DATA_DIR>/tm-champion.json),
+    read by `tetramaster._champion`. `POL_TM_CHAMPION=0` disables. `data_dir`
+    is no longer used and stays for callers that pass it."""
     if os.environ.get("POL_TM_CHAMPION", "1") == "0":
         print("champion: POL_TM_CHAMPION=0 -- not named")
         return None
@@ -406,9 +410,6 @@ def _write_champion(players, ranks, data_dir=None):
         print("champion: member %s placed 1st but has no display name -- "
               "not named" % mid)
         return None
-    root = data_dir or os.environ.get("POL_DATA_DIR") \
-        or os.path.dirname(os.path.dirname(tmrank.store_dir()))
-    path = os.path.join(root, "tm-champion.json")
     try:
         import tmprize
         week = tmprize.week_id()
@@ -416,17 +417,18 @@ def _write_champion(players, ranks, data_dir=None):
         week = 0
     blob = {"member_id": mid, "name": name.strip()[:16], "week": week}
     try:
-        os.makedirs(root, exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(blob, f)
-        os.replace(tmp, path)
-    except OSError as exc:
-        print("champion: could not write %s (%r)" % (path, exc))
+        import tmstore
+        tmstore.ensure_schema()
+        tmstore.db.upsert("tm_champion",
+                          {"week": int(week), "member_id": str(mid),
+                           "name": blob["name"], "named_at": time.time()},
+                          key="week")
+    except Exception as exc:                                  # noqa: BLE001
+        print("champion: could not record the champion (%r)" % (exc,))
         return None
     print("champion: member %s %r is #1 -- the Card Shop now sells \"%s's "
-          "Pack\" (rank_1 Pack) and every save rewrite carries the name at "
-          "+0x104 (%s)" % (mid, blob["name"], blob["name"], path))
+          "Pack\" (rank_1 Pack) (tm_champion, week %s)"
+          % (mid, blob["name"], blob["name"], week))
     return blob
 
 

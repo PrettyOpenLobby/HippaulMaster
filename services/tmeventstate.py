@@ -1,10 +1,14 @@
 """Tetra Master tournament standings, shared between the two processes.
 
-`authsess` (tetramaster) scores each finished event game into one JSON file;
-`login` (tmtitle) builds `b/g/TM0EventMemberList` from it on the client's
-re-entry fetch. One writer, atomic replace, so the reader never sees half a
-file. Keyed by the event window's start (tetramaster.event_window), so a new
-window starts a fresh board.
+`authsess` (tetramaster) scores each finished event game into the
+`tm_event_standing` table (PostgreSQL, through tmstore; it was the file
+`<POL_DATA_DIR>/tm-event-state.json`); `login` (tmtitle) builds
+`b/g/TM0EventMemberList` from it on the client's re-entry fetch. Each score is
+one transaction under an advisory lock, so two finished games never lose each
+other's steps and a reader never sees half a game. Keyed by the event window's
+start (tetramaster.event_window), so a new window starts a fresh board; the
+rows of earlier windows stay in the table as history and nothing here reads
+them.
 
 THE MEMBER LIST (static reading of the client): 0x2808 bytes, count
 u32 at +0x04, records of 0x28 from +0x08 (up to 256):
@@ -29,36 +33,40 @@ counted: 0 combos, 1 perfect wins, 2 firsts in a row, 3 Rotating Block
 conversions, 4 ties, 5 wins acting first, 6 Chance Block conversions
 (MISSION_RULES).
 """
-import json
+import contextlib
 import os
 import struct
 import time
 
+import tmstore
+
 MEMBER_LIST_SIZE = 0x2808
 REC_OFF, REC_SIZE, REC_MAX = 0x08, 0x28, 256
 
-
-def _path():
-    root = os.environ.get("POL_DATA_DIR", "/data")
-    return os.path.join(root, "tm-event-state.json")
-
-
-def _load():
-    try:
-        with open(_path(), encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
+#: The advisory lock every write takes: a score is read, changed and written
+#: back, and two games finishing at once must not lose each other's steps.
+_LOCK = "tm_event_standing"
 
 
-def _store(data):
-    path = _path()
-    tmp = path + ".tmp"
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f)
-    os.replace(tmp, path)
+@contextlib.contextmanager
+def _board(window):
+    """(conn, {member: row}) for one window, inside a write transaction that
+    holds `_LOCK`. Rows put back into the dict are written on exit."""
+    tmstore.ensure_schema()
+    db = tmstore.db
+    with db.transaction(lock=_LOCK) as conn:
+        rows = db.query("SELECT member, data FROM tm_event_standing "
+                        "WHERE event_window = %s", (int(window),), conn=conn)
+        board = {r["member"]: dict(r["data"]) for r in rows}
+        before = {k: dict(v) for k, v in board.items()}
+        yield conn, board
+        for member, row in board.items():
+            if before.get(member) != row:
+                db.execute("INSERT INTO tm_event_standing (event_window, member, data)"
+                           " VALUES (%s, %s, %s::jsonb)"
+                           " ON CONFLICT (event_window, member) DO UPDATE"
+                           " SET data = EXCLUDED.data, updated_at = now()",
+                           (int(window), str(member), tmstore.jsonb(row)), conn=conn)
 
 
 def steps_table():
@@ -117,12 +125,13 @@ def record_game(window, results, active_missions=None, extras=None):
     """Score one finished game. `results` is [(member_id, outcome), ...] with
     outcome one of perfect / win / tie / lose / quit. Returns {member: row}."""
     steps = steps_table()
-    data = _load()
-    key = str(int(window))
-    # Only the current window is kept; older boards are history, not state.
-    board = data.get(key) or {}
-    data = {key: board}
     out = {}
+    with _board(window) as (_conn, board):
+        _score(board, results, steps, active_missions, extras, out)
+    return out
+
+
+def _score(board, results, steps, active_missions, extras, out):
     for mid, outcome in results:
         row = board.setdefault(str(mid), {"steps": 0, "games": 0, "wins": 0,
                                           "perfect": 0, "ties": 0,
@@ -144,45 +153,40 @@ def record_game(window, results, active_missions=None, extras=None):
         row["missions"] = _mission_bits(row, active_missions)
         row["at"] = time.time()
         out[str(mid)] = dict(row)
-    _store(data)
-    return out
 
 
 def set_deck(window, member_id, rows):
     """Remember the five cards a player picked on entering this window's
     tournament (8-value rows as bytes). Entering also lists them on the board."""
-    data = _load()
-    key = str(int(window))
-    board = data.get(key) or {}
-    data = {key: board}
-    row = board.setdefault(str(member_id), {"steps": 0, "games": 0, "wins": 0,
-                                            "perfect": 0, "ties": 0,
-                                            "streak": 0, "best_streak": 0,
-                                            "missions": 0})
-    row["deck"] = [r.decode("ascii") if isinstance(r, bytes) else str(r)
-                   for r in rows][:5]
-    row["at"] = row.get("at") or time.time()
-    _store(data)
+    with _board(window) as (_conn, board):
+        row = board.setdefault(str(member_id), {"steps": 0, "games": 0, "wins": 0,
+                                                "perfect": 0, "ties": 0,
+                                                "streak": 0, "best_streak": 0,
+                                                "missions": 0})
+        row["deck"] = [r.decode("ascii") if isinstance(r, bytes) else str(r)
+                       for r in rows][:5]
+        row["at"] = row.get("at") or time.time()
 
 
 def deck(window, member_id):
     """The five picked rows (bytes) for this window, or []."""
-    row = (_load().get(str(int(window))) or {}).get(str(member_id)) or {}
+    row = standings(window).get(str(member_id)) or {}
     return [r.encode("ascii") for r in (row.get("deck") or [])][:5]
 
 
 def mark_paid(window, member_id):
     """This player's tournament prize has been credited for this window."""
-    data = _load()
-    key = str(int(window))
-    board = data.get(key) or {}
-    data = {key: board}
-    board.setdefault(str(member_id), {"steps": 0, "missions": 0})["paid"] = True
-    _store(data)
+    with _board(window) as (_conn, board):
+        row = board.setdefault(str(member_id), {"steps": 0, "missions": 0})
+        row["paid"] = True
 
 
 def standings(window):
-    return dict((_load().get(str(int(window))) or {}))
+    """{member: row} for one window ({} when nobody has played in it)."""
+    tmstore.ensure_schema()
+    rows = tmstore.db.query("SELECT member, data FROM tm_event_standing "
+                            "WHERE event_window = %s", (int(window),))
+    return {r["member"]: dict(r["data"]) for r in rows}
 
 
 def member_list_blob(window, pol_id_of, name_of, n=MEMBER_LIST_SIZE):

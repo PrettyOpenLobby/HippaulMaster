@@ -1,8 +1,9 @@
 """The shop scene's @Init family: the card shop opener, the auction Check Out door, the event shop
 list, the champion's pack.
 """
-import json
 import os
+import time
+import tmstore
 from .deps import tmauction
 from . import cardshop, cardtables, common, protocol, purse
 
@@ -530,7 +531,7 @@ def _shopinit_body(member_id=None):
     # gold, three cards drawn from levels 9..11), Cardsh.BIN's "celebrate
     # <X>'s #1 rank" feature. This is the wiki-documented Tetra Master
     # "event": the top-ranked player's pack in the ordinary Card Shop. The
-    # weekly publish names the champion (`tools/tmrank.py`, `tm-champion.json`);
+    # weekly publish names the champion (`tools/tmrank.py`, table `tm_champion`);
     # with no champion the key is omitted and the shop shows "'s Pack", which
     # is what it has always shown.
     _sn = _champion_name()
@@ -542,9 +543,12 @@ def _shopinit_body(member_id=None):
 
 
 #: THE CHAMPION -- last week's #1 by VS. Rating, named by the Sunday publish.
-#: `<POL_DATA_DIR>/tm-champion.json` = {"member_id", "name", "week"}. The
-#: card shop labels the rank_1 Pack "<name>'s Pack" (`/SN=`, above).
-#: `POL_TM_CHAMPION_NAME` overrides the file for a test.
+#: The newest row of the `tm_champion` table (PostgreSQL, through tmstore; it
+#: was the file `<POL_DATA_DIR>/tm-champion.json`) = {"member_id", "name",
+#: "week"}. The card shop labels the rank_1 Pack "<name>'s Pack" (`/SN=`,
+#: above). `POL_TM_CHAMPION_NAME` overrides the table for a test. Read at most
+#: once every _CHAMPION_TTL_S, since the shop opens far more often than the
+#: champion changes (once a week).
 #:
 #: WARNING: RETRACTED 2026-09-07: the save header's +0x104 string is NOT the shop's
 #: pack label. The shop init at 0x1014EE does copy save +0x104 into the shop
@@ -553,8 +557,9 @@ def _shopinit_body(member_id=None):
 #: player's first deck tab (seen on a tester's card screen). The save stamp is now
 #: behind `POL_TM_CHAMPION_SAVE_SLOT` (default 0); the slots are authored from
 #: the player's own `@Decks=` name report -- see `SAVE_OFF_DECK_NAMES`.
-_CHAMPION_FILE = "tm-champion.json"
+_CHAMPION_FILE = "tm_champion"
 _CHAMPION_CACHE = {"mtime": None, "data": None}
+_CHAMPION_TTL_S = 60.0
 SAVE_OFF_CHAMPION = 0x104           #: = SAVE_OFF_DECK_NAMES[0]; stamp OFF by default
 SAVE_CHAMPION_WIDTH = 17            #: 16 chars + NUL, the shape of every name
 
@@ -564,19 +569,19 @@ def _champion():
     forced = os.environ.get("POL_TM_CHAMPION_NAME")
     if forced is not None:
         return {"name": forced} if forced.strip() else {}
-    path = os.path.join(os.environ.get("POL_DATA_DIR", "/data"), _CHAMPION_FILE)
-    try:
-        mt = os.path.getmtime(path)
-    except OSError:
-        return {}
-    if _CHAMPION_CACHE["mtime"] != mt:
+    now = time.monotonic()
+    if _CHAMPION_CACHE["mtime"] is None or now - _CHAMPION_CACHE["mtime"] >= _CHAMPION_TTL_S:
         try:
-            with open(path) as f:
-                got = json.load(f)
-            _CHAMPION_CACHE["data"] = got if isinstance(got, dict) else {}
-        except (OSError, ValueError):
+            tmstore.ensure_schema()
+            row = tmstore.db.query_one(
+                "SELECT member_id, name, week FROM tm_champion"
+                " ORDER BY named_at DESC LIMIT 1")
+            _CHAMPION_CACHE["data"] = dict(row) if row else {}
+        except tmstore.errors() as exc:
+            common._say("tm: champion not read (%r) -- the rank_1 Pack keeps its "
+                        "plain label" % (exc,))
             _CHAMPION_CACHE["data"] = {}
-        _CHAMPION_CACHE["mtime"] = mt
+        _CHAMPION_CACHE["mtime"] = now
     return _CHAMPION_CACHE["data"] or {}
 
 

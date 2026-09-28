@@ -168,4 +168,9 @@ class TetraMaster(titles.Title):
 
 
 def register():
+    # Tetra Master's own tables (tmstore, services/tm_migrations/), applied
+    # when the core loads the title, before the first game line needs them
+    if os.environ.get("POL_DATABASE_URL", "").strip():
+        import tmstore
+        tmstore.migrate_at_start("tmtitle")
     return titles.register(TetraMaster())
