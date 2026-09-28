@@ -755,7 +755,7 @@ def watch_checks(tmp, boardtm, polboards, args):
     check("as the bot, the live feed keeps ITS own 0 s end (not the 10 min default)",
           d is not None and d.ended_ttl == 0.0 and any(
               m == "POST" and u.endswith("/channels/55/messages") for m, u, _b in net.calls), d and d.ended_ttl)
-    os.remove(path)
+    tmstore.kv.delete(tmstore.watch_key())
     boardtm._TABLES.update(t=0.0, d={})
 
 
