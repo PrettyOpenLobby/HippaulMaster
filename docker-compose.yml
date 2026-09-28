@@ -12,6 +12,13 @@
 # title), and adds the weekly ranking job and, optionally, the live board.
 # Everything else - ports, volumes, the other services - is OpenLobby's.
 #
+# Tetra Master keeps its durable data (tournament standings, the weekly
+# champion, the board's Discord bookkeeping) in OpenLobby's PostgreSQL and its
+# live state (the room roster, the matches being watched) in OpenLobby's
+# Valkey. login and authsess get both from the core's own service entries;
+# the two services added here name them and wait for them the same way. Each
+# applies Tetra Master's migrations (services/tm_migrations/) at start.
+#
 # Before the first start: `python tools/tmdata_build.py --client <your
 # Tetra Master install>` (the client's parameter tables; see README.md).
 
@@ -74,12 +81,18 @@ services:
       POL_DATA_DIR: /data
       POL_RESOURCE_DIR: /data/resources
       POL_ACCOUNTS_DB: /data/accounts.db
-      POL_TM_ROSTER_FILE: /data/tm-roster.json
+      POL_DATABASE_URL: "postgresql://openlobby:${POL_DB_PASSWORD:-openlobby}@postgres:5432/openlobby"
+      POL_VALKEY_URL: "valkey://valkey:6379/0"
       TM_RANK_AT: "${TM_RANK_AT:-}"
       PYTHONUNBUFFERED: "1"
     volumes:
       - pol-data:/data
       - pol-logs:/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
 
   # Optional: the live web board (standings, auctions, matches in progress),
   # drawn with art baked from your own client (tools/tm_boardart_bake.py).
@@ -94,7 +107,9 @@ services:
     environment:
       POL_ACCOUNTS_DB: /data/accounts.db
       POL_DATA_DIR: /data
-      POL_BOARDS_STATE_DIR: /state
+      # the Discord bookkeeping goes to the tm_board_state table
+      POL_DATABASE_URL: "postgresql://openlobby:${POL_DB_PASSWORD:-openlobby}@postgres:5432/openlobby"
+      POL_VALKEY_URL: "valkey://valkey:6379/0"
       POL_BOARDS_TM_URL: "${POL_BOARDS_TM_URL:-}"
       POL_BOARDS_TM_DISCORD_WEBHOOK: "${POL_BOARDS_TM_DISCORD_WEBHOOK:-}"
       POL_BOARDS_TM_AUCTION_DISCORD_WEBHOOK: "${POL_BOARDS_TM_AUCTION_DISCORD_WEBHOOK:-}"
@@ -103,7 +118,8 @@ services:
       - "127.0.0.1:8793:8793"
     volumes:
       - pol-data:/data:ro
-      - tm-board-state:/state
-
-volumes:
-  tm-board-state:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
