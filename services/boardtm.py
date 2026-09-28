@@ -35,7 +35,6 @@ THINGS THIS MODULE MUST NEVER DO -- each is what the obvious call does:
     JSON, then from OpenLobby's accounts functions (accounts.connect(), the
     stack's PostgreSQL), which this module only ever reads through.
 """
-import glob
 import hashlib
 import io
 import json
@@ -45,6 +44,7 @@ import time
 
 import tm_cardprm
 import tmauction
+import tmblob
 import tmrank
 import tmstore
 
@@ -106,13 +106,6 @@ _NAMES_LOCK = threading.Lock()
 _RENDER = {}
 _RENDER_LOCK = threading.Lock()
 _WARNED = set()
-
-
-def resource_dir():
-    """Where the collections and the auction store live: tmrank's own rule
-    (POL_RESOURCE_DIR, else <POL_DATA_DIR>/resources), read at call time --
-    tmauction.RESOURCE_DIR is frozen at import."""
-    return os.path.dirname(tmrank.store_dir())
 
 
 def _accounts_conn():
@@ -228,12 +221,7 @@ def week_info():
 
 
 def collection_members():
-    try:
-        names = os.listdir(resource_dir())
-    except OSError:
-        return []
-    return sorted((f[:-len(tmrank.COLLECTION_SUFFIX)] for f in names
-                   if f.endswith(tmrank.COLLECTION_SUFFIX)),
+    return sorted(tmrank.collection_members(),
                   key=lambda m: (not m.isdigit(), int(m) if m.isdigit() else 0, m))
 
 
@@ -247,7 +235,7 @@ def live_standings(members, names, now=None):
     since = tmrank.week_start(now)
     out = []
     for m in members:
-        data = tmrank.collection_of(m, resource_dir())
+        data = tmrank.collection_of(m)
         st = tmrank.stats_of(data)
         if st["games"] <= 0 or not tmrank._eligible(st, 3, since):
             continue
@@ -295,9 +283,8 @@ def _whole(blob, rec):
 
 def _bids(ai):
     try:
-        with open(os.path.join(resource_dir(), BIDS_NAME % int(ai)), "rb") as fh:
-            blob = _whole(fh.read(), tmauction.BID_REC)
-    except OSError:
+        blob = _whole(tmblob.read(BIDS_NAME % int(ai)) or b"", tmauction.BID_REC)
+    except tmblob.errors():
         return []
     rows = [tmauction.read_bid(blob, i) for i in range(tmauction.bid_count(blob))]
     rows.sort(key=lambda b: b["amount"])            # the client's own order
@@ -314,11 +301,14 @@ def auction(now=None):
     """
     now = int(now if now is not None else time.time())
     listings, sold, activity = [], [], []
-    for fn in sorted(glob.glob(os.path.join(resource_dir(), "*" + EXHIBIT_SUFFIX))):
+    try:
+        stores = tmblob.names(path=EXHIBIT_SUFFIX[1:])
+    except tmblob.errors():
+        stores = []
+    for fn in stores:
         try:
-            with open(fn, "rb") as fh:
-                blob = _whole(fh.read(), tmauction.REC)
-        except OSError:
+            blob = _whole(tmblob.read(fn) or b"", tmauction.REC)
+        except tmblob.errors():
             continue
         for i in range(tmauction.count(blob)):
             try:

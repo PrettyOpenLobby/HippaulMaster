@@ -2,6 +2,7 @@
 import os
 import struct
 import tmauction
+import tmblob
 import tmfixtures
 import tmrank
 import tmroom
@@ -180,8 +181,8 @@ def resource_length(path):
         # 72 and hang it on the difference, which is why the bid history
         # cannot share `U/g/TM0_BIDLIST` with `<SI>+<IB>`.
         try:
-            have = os.path.getsize(corenames._resource_read_file(path))
-        except OSError:
+            have = tmblob.size(corenames._resource_read_file(path)) or 0
+        except tmblob.errors():
             have = 0
         if have:
             rec = tmauction.BID_REC if tmauction is not None else 0x48
@@ -216,8 +217,8 @@ def resource_length(path):
         # exactly, one opcode over: the reader checks the trailer at the
         # length IT asked for and finds our padding there instead.
         try:
-            have = os.path.getsize(corenames._resource_read_file(path))
-        except OSError:
+            have = tmblob.size(corenames._resource_read_file(path)) or 0
+        except tmblob.errors():
             have = 0
         if have:
             if have % 0xC0:
@@ -262,8 +263,8 @@ def resource_length(path):
         # above and for the same measured reason -- the reader's length is
         # `rows * 232`, not this opcode's default. See `_RANK_LIST_PATH`.
         try:
-            have = os.path.getsize(corenames._resource_read_file(path))
-        except OSError:
+            have = tmblob.size(corenames._resource_read_file(path)) or 0
+        except tmblob.errors():
             have = 0
         if have:
             if have % rankings._RANK_LIST_REC:

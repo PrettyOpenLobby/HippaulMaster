@@ -79,7 +79,6 @@ services:
     entrypoint: ["python", "tools/tmrank_job.py"]
     environment:
       POL_DATA_DIR: /data
-      POL_RESOURCE_DIR: /data/resources
       POL_DATABASE_URL: "postgresql://openlobby:${POL_DB_PASSWORD:-openlobby}@postgres:5432/openlobby"
       POL_VALKEY_URL: "valkey://valkey:6379/0"
       TM_RANK_AT: "${TM_RANK_AT:-}"

@@ -4,6 +4,7 @@ build.
 import os
 import struct
 import time
+import tmblob
 import tmroom
 from . import corenames, templates
 
@@ -187,11 +188,11 @@ def _lobby_counts_live(path, data, subject=0):
         rls = {}
         for zid in range(0, 32):
             rl_path = "b/g/RL%03d" % zid
-            blob = None
             try:
-                with open(corenames._resource_read_file(rl_path, subject), "rb") as f:
-                    blob = f.read()
-            except OSError:
+                blob = tmblob.read(corenames._resource_read_file(rl_path, subject))
+            except tmblob.errors():
+                blob = None
+            if blob is None:
                 blob = templates._tm_template_blob(rl_path)
             if blob:
                 rls[zid] = blob

@@ -1,5 +1,4 @@
 """The member profile fields for content id 2 (card level, title, average rank)."""
-import json
 import re
 from . import corenames
 
@@ -18,8 +17,7 @@ def profile_fields(cid, member_id):
     out = {}
     try:
         import tmrank
-        with open(tmrank.pool_file(), encoding="utf-8") as fh:
-            pool = json.load(fh)
+        pool = tmrank.observed_pools()
         want = corenames.accounts.content_id_int(cid)
         level = None
         # `member_id` reaches us from the handle link, which a Content ID

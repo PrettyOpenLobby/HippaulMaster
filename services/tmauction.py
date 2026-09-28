@@ -95,7 +95,6 @@ twelve criteria values are for. Opening the menu sends nothing (measured
 band is chosen. `<IO>`/`<IB>` select "my sales"/"my bids" and send those
 criteria all-zero, which is why they are the only two shapes we have ever seen.
 """
-import json
 import os
 import struct
 import time
@@ -537,11 +536,19 @@ def bs_groups(rec):
 # a duplicate a player can report; the alternative is a card that silently
 # ceases to exist.
 
-RESOURCE_DIR = os.environ.get("POL_RESOURCE_DIR", "/data/resources")
-
-
 def pending_file(member):
-    return os.path.join(RESOURCE_DIR, "auction-pending-%s.json" % member)
+    """The record name (tmblob.py) of what Check Out owes a member. It keeps
+    the name the file had under resources/, so it is the blob
+    (`auction-pending-<member>`, `json`)."""
+    return "auction-pending-%s.json" % member
+
+
+def _pending_of(d):
+    d = d if isinstance(d, dict) else {}
+    return {"money": int(d.get("money") or 0),
+            "cards": [list(c) for c in d.get("cards") or [] if len(c) == 16],
+            "won": [list(c) for c in d.get("won") or [] if len(c) == 16],
+            "refund": int(d.get("refund") or 0)}
 
 
 def pending(member):
@@ -552,15 +559,27 @@ def pending(member):
     They are two Check Out sections with two different labels, so they cannot
     share a list -- a won card in `cards` renders as "returned" (measured).
     """
+    import tmblob
     try:
-        with open(pending_file(member), "r", encoding="utf-8") as f:
-            d = json.load(f)
-    except (OSError, ValueError):
-        return {"money": 0, "cards": [], "won": [], "refund": 0}
-    return {"money": int(d.get("money") or 0),
-            "cards": [list(c) for c in d.get("cards") or [] if len(c) == 16],
-            "won": [list(c) for c in d.get("won") or [] if len(c) == 16],
-            "refund": int(d.get("refund") or 0)}
+        return _pending_of(tmblob.read_json(pending_file(member)))
+    except tmblob.errors():
+        return _pending_of(None)
+
+
+def _update_pending(member, change):
+    """Read, change and write a member's pending record in one transaction
+    that holds its lock, so a sale credited by one container and a Check Out
+    collected by another cannot overwrite each other. Raises on a failure."""
+    import tmblob
+    name = pending_file(member)
+    with tmblob.locked(name) as conn:
+        try:
+            d = _pending_of(tmblob.read_json(name, conn=conn))
+        except ValueError:
+            d = _pending_of(None)            # a corrupt record reads empty, as it did
+        change(d)
+        tmblob.write_json(name, d, conn=conn)
+    return d
 
 
 def add_pending(member, money=0, card=None, won=None, refund=0):
@@ -572,40 +591,30 @@ def add_pending(member, money=0, card=None, won=None, refund=0):
     Raises on a write failure -- the caller MUST NOT remove the listing/hold if
     this does not land.
     """
-    d = pending(member)
-    d["money"] = int(d["money"]) + int(money or 0)
-    d["refund"] = int(d.get("refund") or 0) + int(refund or 0)
-    if card is not None:
-        d["cards"].append([int(v) for v in card])
-    if won is not None:
-        d["won"].append([int(v) for v in won])
-    tmp = pending_file(member) + ".tmp"
-    os.makedirs(RESOURCE_DIR, exist_ok=True)
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(d, f)
-    os.replace(tmp, pending_file(member))
-    return d
+    def change(d):
+        d["money"] = int(d["money"]) + int(money or 0)
+        d["refund"] = int(d.get("refund") or 0) + int(refund or 0)
+        if card is not None:
+            d["cards"].append([int(v) for v in card])
+        if won is not None:
+            d["won"].append([int(v) for v in won])
+    return _update_pending(member, change)
 
 
 def clear_pending(member, money=False, cards=False, won=False, refund=False):
     """Drop what Check Out has just collected. Selective, because proceeds,
     returned cards, won cards and bid refunds are four different messages and
     any may fail."""
-    d = pending(member)
-    if money:
-        d["money"] = 0
-    if cards:
-        d["cards"] = []
-    if won:
-        d["won"] = []
-    if refund:
-        d["refund"] = 0
-    tmp = pending_file(member) + ".tmp"
-    os.makedirs(RESOURCE_DIR, exist_ok=True)
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(d, f)
-    os.replace(tmp, pending_file(member))
-    return d
+    def change(d):
+        if money:
+            d["money"] = 0
+        if cards:
+            d["cards"] = []
+        if won:
+            d["won"] = []
+        if refund:
+            d["refund"] = 0
+    return _update_pending(member, change)
 
 
 def card_row_from_ii(ii):

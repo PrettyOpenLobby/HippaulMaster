@@ -18,6 +18,9 @@ the client echoes its whole option set back in `@Opt=`, so the zeros it just rea
 from us are stored as though the player had chosen them.
 
     python tools/tm_save_defaults_test.py        # exit 0 on success
+
+The save is a row of the core's blob table, the same one the lobby serves, so
+the suite runs on a throwaway PostgreSQL database (tmpg.py).
 """
 import os
 import struct
@@ -28,6 +31,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import tm_testenv                                                  # noqa: E402
 tm_testenv.setup()          # this tree's services + the OpenLobby core
+import tmpg                                                        # noqa: E402
+
+if tmpg.fresh_database() is None:
+    sys.exit(tmpg.skip_or_fail("tm_save_defaults_test"))
 
 os.environ.setdefault("POL_LOG_DIR", tempfile.mkdtemp(prefix="tmdef-log-"))
 _RES = tempfile.mkdtemp(prefix="tmdef-res-")
@@ -40,8 +47,8 @@ os.environ["POL_SESSION_SHARE"] = "0"
 import responders as R                                          # noqa: E402
 import tmsave                                                   # noqa: E402
 import tetramaster                                              # noqa: E402
+import tmblob                                                   # noqa: E402
 
-R.RESOURCE_DIR = _RES
 PATH = "U/g/TM0DataFile"
 LEN = 12328 + 4
 MEMBER = "9901"
@@ -104,15 +111,14 @@ print("a STORED save is never healed on the way out:")
 # Zero is a LEGAL value here (Off, muted, "Don't skip"). Overwriting a stored
 # zero would destroy a real choice -- the trap `iniheal` documents for the shim's
 # ini, one game over. Repair is `tools/tmsave.py --heal`, per member, explicitly.
-stored = os.path.join(_RES, "%s.%s.bin" % (MEMBER, "U_g_TM0DataFile"))
-with open(stored, "wb") as f:
-    f.write(b"\x00" * LEN)
+stored = "%s.%s.bin" % (MEMBER, "U_g_TM0DataFile")
+tmblob.write(stored, b"\x00" * LEN)
 kept = R._resource_blob(PATH, LEN)
 check("a stored all-zero save is served verbatim", any(kept), False)
 
 print("the switch:")
 os.environ["POL_TM_SAVE_DEFAULTS"] = "0"
-os.remove(stored)
+tmblob.delete(stored)
 off_blob = R._resource_blob(PATH, LEN)
 check("POL_TM_SAVE_DEFAULTS=0 restores the old zeros", off_blob[0x0B3], 0)
 os.environ["POL_TM_SAVE_DEFAULTS"] = "1"

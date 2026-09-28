@@ -66,7 +66,6 @@ path to the notice screen must go through `announce()` -- never build the body
 by hand.
 """
 import hashlib
-import json
 import os
 import struct
 import time
@@ -226,10 +225,10 @@ def lucky_award(takes):
 # 3. THE PER-MEMBER RECORD
 # --------------------------------------------------------------------------
 #
-# Beside the collection JSON and for the reason `_collection_file` gives: that
-# directory is the bind-mounted per-member state every container already sees.
-# Its own suffix, so it can never collide with a POL resource path or with the
-# collection.
+# Beside the collection record and for the reason `_collection_file` gives: the
+# blob `(<member>, tm_prize.json)` in the core's blob table (tmblob.py), which
+# every container sees and which goes when the account does. Its own path, so
+# it can never collide with a POL resource path or with the collection.
 SUFFIX = ".tm_prize.json"
 
 
@@ -303,28 +302,22 @@ def grant_ranking(member_id, publish_id, top30_rank=None, rookie_rank=None,
     return int(t30), int(rk)
 
 
-def _dir():
-    root = os.environ.get("POL_RESOURCE_DIR")
-    if not root:
-        root = os.path.join(os.environ.get("POL_DATA_DIR", "/data"), "resources")
-    return root
-
-
 def path_for(member_id):
+    """The record name (tmblob.py) of a member's prize record."""
     if member_id is None:
         return None
-    return os.path.join(_dir(), "%s%s" % (member_id, SUFFIX))
+    return "%s%s" % (member_id, SUFFIX)
 
 
 def load(member_id):
-    path = path_for(member_id)
+    name = path_for(member_id)
     data = blank()
-    if not path or not os.path.exists(path):
+    if not name:
         return data
     try:
-        with open(path, "r") as f:
-            got = json.load(f)
-    except (OSError, ValueError):
+        import tmblob
+        got = tmblob.read_json(name)
+    except (ImportError,) + _errors():
         # A corrupt record must not take the Prize Center down with it: the
         # player loses a tally, not the screen.
         return data
@@ -333,17 +326,23 @@ def load(member_id):
     return data
 
 
+def _errors():
+    try:
+        import tmblob
+        return tmblob.errors()
+    except ImportError:
+        return (ValueError,)
+
+
 def store(member_id, data):
-    path = path_for(member_id)
-    if not path:
+    """One statement: a reader sees the old record or the new one."""
+    name = path_for(member_id)
+    if not name:
         return False
     try:
-        os.makedirs(_dir(), exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(data, f, indent=1, sort_keys=True)
-        os.replace(tmp, path)
-    except OSError:
+        import tmblob
+        tmblob.write_json(name, data, indent=1, sort_keys=True)
+    except (ImportError,) + _errors():
         return False
     return True
 
@@ -495,8 +494,6 @@ def excinit_body(member_id, shop_no=1, now=None, top30=0, rookie=0, say=None):
 
 def selftest(say=print):
     """Every assertion here was checked to FAIL with its rule broken."""
-    import shutil
-    import tempfile
     ok = True
 
     def check(cond, what):
@@ -581,10 +578,16 @@ def selftest(say=print):
                 and lucky_award(3) == 30 and lucky_award(9) == 30,
                 "10 a card, capped at the 30 the client's text promises")
 
-    # -- the record, on a real temp directory --------------------------------
-    root = tempfile.mkdtemp(prefix="tmprize-")
-    old = os.environ.get("POL_RESOURCE_DIR")
-    os.environ["POL_RESOURCE_DIR"] = root
+    # -- the record, in the suite's own database (tm_run_all.py gives it one) --
+    import tmblob
+
+    def _wipe():
+        for m in ("m1", "m2", "m3", "m4"):
+            try:
+                tmblob.delete(path_for(m))
+            except tmblob.errors():
+                pass
+    _wipe()
     try:
         now = sunday + 3600                   # Sunday 01:00, week W
         lucky_ids = pick_lucky(now=now)
@@ -711,16 +714,11 @@ def selftest(say=print):
                     "an unaffordable purchase changes nothing")
 
         # A CORRUPT RECORD MUST NOT TAKE THE SCREEN DOWN.
-        with open(path_for("m4"), "w") as f:
-            f.write("{not json")
+        tmblob.write(path_for("m4"), b"{not json")
         ok &= check(load("m4") == blank(),
                     "a corrupt record reads as an empty one")
     finally:
-        if old is None:
-            os.environ.pop("POL_RESOURCE_DIR", None)
-        else:
-            os.environ["POL_RESOURCE_DIR"] = old
-        shutil.rmtree(root, ignore_errors=True)
+        _wipe()
 
     say("tmprize selftest %s" % ("OK" if ok else "FAILED"))
     return ok

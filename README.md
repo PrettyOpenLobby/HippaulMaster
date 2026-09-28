@@ -88,8 +88,9 @@ its zones, so that must be an address the client can route to.
 The five ranking lists are rebuilt once a week, Sunday 00:05 UTC, by the
 `tmrank` service (a loop around `tools/tmrank.py --publish`). Set
 `TM_RANK_AT=now` to publish at start as well, for a fresh server. The lists
-are served from `/data/resources/tmrank/`; until the first publish the
-client sees one empty row, which is what its rankings screen needs to open.
+are kept in the stack's PostgreSQL, as the `tmrank` records of the core's
+`blob` table (services/tmblob.py); until the first publish the client sees
+one empty row, which is what its rankings screen needs to open.
 
 ## The live board (optional)
 

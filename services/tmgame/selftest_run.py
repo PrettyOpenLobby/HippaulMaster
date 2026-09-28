@@ -1,7 +1,9 @@
 """The selftest entry point (selftest) and the checks against the live captured opener."""
+import contextlib
 import json
 import os
 import tm_cardprm
+import tmblob
 import tmbattle
 import struct
 from .deps import tmsave
@@ -10,6 +12,33 @@ from . import (
     pushqueue, savefile, selftest_ingame, selftest_match, selftest_tables, shopdoors, trade,
 )
 
+
+@contextlib.contextmanager
+def _blob_sandbox():
+    """What a fresh POL_RESOURCE_DIR was for the self-tests: inside the block
+    the blob table is EMPTY, and afterwards it holds exactly what it held
+    before. Every record is read out, the table emptied, and on the way out
+    emptied again and refilled.
+
+    Only on the throwaway database tm_run_all.py makes for a suite
+    (TM_TEST_DATABASE=1): anywhere else it refuses, because on a real server
+    it would take every player's saves away for the length of the block.
+    """
+    if os.environ.get("TM_TEST_DATABASE") != "1":
+        raise RuntimeError("the blob sandbox runs only on a database "
+                           "tm_run_all.py made (TM_TEST_DATABASE=1)")
+    from polcore import blobs
+    tmblob.names()                       # the core's tables, before the read
+    kept = [(i.scope, i.path, blobs.get(i.scope, i.path))
+            for i in blobs.listing()]
+    tmblob.tmstore.db.execute("DELETE FROM blob")
+    try:
+        yield
+    finally:
+        with tmblob.tmstore.db.transaction() as conn:
+            tmblob.tmstore.db.execute("DELETE FROM blob", conn=conn)
+            for scope, path, data in kept:
+                blobs.put(scope, path, data, conn=conn)
 
 def selftest():
     """Run the suite with the SHARED ROSTER SNAPSHOT out of reach.
@@ -383,17 +412,14 @@ def _selftest_all():
     # --- MONEY AND THE SALE ---------------------------------------------------
     # Against the REAL bytes: member 1's stored collection and the `@Sell=` the
     # client actually sent on 2026-08-18T18:52:06Z.
-    import tempfile as _tempfile
-    _dir = _tempfile.mkdtemp()
-    _old_res = os.environ.get("POL_RESOURCE_DIR")
     _old_wr = os.environ.get("POL_TM_SAVE_WRITE")
-    os.environ["POL_RESOURCE_DIR"] = _dir
+    _sandbox = _blob_sandbox()
+    _sandbox.__enter__()                         # an empty store, as a fresh dir was
     os.environ["POL_TM_SAVE_WRITE"] = "0"       # the binary save has its own test
     try:
         _cards = [[160, 84, 0, 99, 75, 23, 20, 0], [42, 43, 1, 20, 18, 7, 4, 2],
                   [220, 55, 0, 78, 80, 19, 18, 2], [20, 18, 1, 11, 10, 4, 2, 2]]
-        json.dump({"cards": _cards},
-                  open(os.path.join(_dir, "1.tm_collection.json"), "w"))
+        tmblob.write_json("1.tm_collection.json", {"cards": _cards})
 
         # The wire entry and the stored row DIVERGE past field 5, which is why
         # the key is five fields and not the whole row.
@@ -415,10 +441,10 @@ def _selftest_all():
         # Own member id so it cannot perturb member 1's fixtures below.
         _saved_sync = os.environ.get("POL_TM_DECK_STAT_SYNC")
         os.environ["POL_TM_DECK_STAT_SYNC"] = "1"
-        json.dump({"cards": [[220, 55, 0, 78, 80, 19, 18, 2],
-                             [220, 55, 0, 78, 80, 19, 18, 2],   # a duplicate id
-                             [160, 84, 0, 99, 75, 23, 20, 0]]},
-                  open(os.path.join(_dir, "dm.tm_collection.json"), "w"))
+        tmblob.write_json("dm.tm_collection.json",
+                          {"cards": [[220, 55, 0, 78, 80, 19, 18, 2],
+                                     [220, 55, 0, 78, 80, 19, 18, 2],   # a duplicate id
+                                     [160, 84, 0, 99, 75, 23, 20, 0]]})
         collection._collection_set_deck("dm", b"@Decks=/C=1@0=/D=220|99|0|78|90|31|0")
         _dmc = collection._collection_load("dm").get("cards", [])
         _m220 = next((c for c in _dmc if c and c[0] == 220), None)
@@ -446,10 +472,10 @@ def _selftest_all():
             os.environ["POL_TM_DECK_STAT_SYNC"] = _saved_sync
 
         # --- CARD GROWTH: a used card grows toward its ceiling, never past ----
-        json.dump({"cards": [list(roll_card_row) for roll_card_row in
-                             ([160, 40, 0, 50, 40, 10, 20, 0],   # Jecht, rolled low
-                              [166, 10, 1, 20, 22, 5, 13, 0])]},  # Shelinda, rolled low
-                  open(os.path.join(_dir, "gm.tm_collection.json"), "w"))
+        tmblob.write_json("gm.tm_collection.json", {
+            "cards": [list(roll_card_row) for roll_card_row in
+                      ([160, 40, 0, 50, 40, 10, 20, 0],   # Jecht, rolled low
+                       [166, 10, 1, 20, 22, 5, 13, 0])]})  # Shelinda, rolled low
         _grew = careerstats._grow_used_cards("gm", [b"160|40|0|50|40|10|20|0",
                                         b"166|10|1|20|22|5|13|0"])
         _gmc = collection._collection_load("gm").get("cards", [])
@@ -465,8 +491,8 @@ def _selftest_all():
                  "vs ceiling [%d,_,%d,%d]" % (_g160, _b160[0], _b160[2],
                                               _b160[3])); ok = False
         # a maxed card that is used must NOT grow (no room)
-        json.dump({"cards": [[160, _b160[0], 0, _b160[2], _b160[3], 23, 20, 0]]},
-                  open(os.path.join(_dir, "gx.tm_collection.json"), "w"))
+        tmblob.write_json("gx.tm_collection.json",
+                          {"cards": [[160, _b160[0], 0, _b160[2], _b160[3], 23, 20, 0]]})
         if careerstats._grow_used_cards("gx", [b"160|%d|0|%d|%d|23|20|0"
                                    % (_b160[0], _b160[2], _b160[3])]) != 0:
             common._say("FAIL: a maxed card must not grow (no room)"); ok = False
@@ -528,7 +554,7 @@ def _selftest_all():
         if purse.money_of(1) != purse._start_money() + _expect:
             common._say("FAIL: the sale must credit the CARD'S price (%d), money is %d"
                  % (_expect, purse.money_of(1))); ok = False
-        left = json.load(open(os.path.join(_dir, "1.tm_collection.json")))["cards"]
+        left = tmblob.read_json("1.tm_collection.json")["cards"]
         if len(left) != 3 or any(c[0] == 220 for c in left):
             common._say("FAIL: the sold card is still in the collection: %r" % (left,)); ok = False
         if b"/M=%d" % purse.money_of(1) not in shopdoors._shopinit_body(1):
@@ -584,9 +610,9 @@ def _selftest_all():
         # itself. The pair is also a control: a discard that moves money means
         # the MONEY path is wrong, not the card path.
         _bal = purse.money_of(1)
-        _n = len(json.load(open(os.path.join(_dir, "1.tm_collection.json")))["cards"])
+        _n = len(tmblob.read_json("1.tm_collection.json")["cards"])
         cardshop._erase_cards(1, b"@Erase=/Mode=1/C=1@0=/D=99|1|0|1|1|1")
-        _after = json.load(open(os.path.join(_dir, "1.tm_collection.json")))
+        _after = tmblob.read_json("1.tm_collection.json")
         if purse.money_of(1) != _bal:
             common._say("FAIL: a discard must not move money -- %d -> %d"
                  % (_bal, purse.money_of(1))); ok = False
@@ -599,7 +625,7 @@ def _selftest_all():
         _held = list(_after["cards"][0])
         cardshop._erase_cards(1, b"@Erase=/Mode=1/C=1@0=/D=%s"
                      % "|".join(str(v) for v in _held[:5]).encode("ascii"))
-        _left = json.load(open(os.path.join(_dir, "1.tm_collection.json")))["cards"]
+        _left = tmblob.read_json("1.tm_collection.json")["cards"]
         if len(_left) != _n - 1 or any(list(c)[:5] == _held[:5] for c in _left):
             common._say("FAIL: a discarded card must leave the collection -- %r still "
                  "holds %r" % (_left, _held[:5])); ok = False
@@ -627,7 +653,7 @@ def _selftest_all():
         os.environ["POL_TM_SAVE_WRITE"] = "1"
         purse._set_money(1, 4321, "selftest")
         collection._collection_to_save(1, [[220, 55, 0, 78, 80, 19, 18, 2]])
-        _blob = open(os.path.join(_dir, "1.U_g_TM0DataFile.bin"), "rb").read()
+        _blob = tmblob.read("1.U_g_TM0DataFile.bin")
         # WARNING: MONEY IS A DWORD AT +0x34, NOT A u16 AT +0x38. Corrected
         # 2026-08-20: +0x38 is Card Points (struct +0x00, where `/CP=` lands);
         # money is file +0x34 -> struct +0xC8, the field BOTH GameInits' `/M=`
@@ -816,16 +842,16 @@ def _selftest_all():
         # Assert on the STORED value, not on money_of() -- both clamp, so a
         # reader-side clamp would hide a writer that persisted -50.
         purse._set_money(1, -50)
-        _stored = json.load(open(os.path.join(_dir, "1.tm_collection.json")))
+        _stored = tmblob.read_json("1.tm_collection.json")
         if _stored.get("money") != 0:
             common._say("FAIL: a negative balance must be clamped BEFORE it is stored, "
                   "got %r" % (_stored.get("money"),)); ok = False
     finally:
-        for k, v in (("POL_RESOURCE_DIR", _old_res), ("POL_TM_SAVE_WRITE", _old_wr)):
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
+        if _old_wr is None:
+            os.environ.pop("POL_TM_SAVE_WRITE", None)
+        else:
+            os.environ["POL_TM_SAVE_WRITE"] = _old_wr
+        _sandbox.__exit__(None, None, None)
 
     common._say("\n%s" % ("selftest OK" if ok else "SELFTEST FAILED"))
     return 0 if ok else 1

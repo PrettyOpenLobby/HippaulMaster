@@ -1,10 +1,9 @@
 """A member's card collection file: loading, storing, granting, offers, deck reports, deck slots and
 deck names.
 """
-import json
 import os
-import threading
 import re
+import tmblob
 from .deps import tmsave
 from . import cardshop, common, opener, purse, shopdoors
 
@@ -62,44 +61,34 @@ from . import cardshop, common, opener, purse, shopdoors
 _COLLECTION_SUFFIX = ".tm_collection.json"
 
 
-def _collection_dir():
-    """POL_RESOURCE_DIR first, exactly as `_save_file` resolves it and for the
-    same reason -- deriving it from POL_DATA_DIR alone agrees only until
-    something sets the override."""
-    root = os.environ.get("POL_RESOURCE_DIR")
-    if not root:
-        root = os.path.join(os.environ.get("POL_DATA_DIR", "/data"), "resources")
-    return root
-
-
 def _collection_file(member_id):
-    """Where a member's collection is kept. Beside the resources, because that
-    directory is already the bind-mounted per-member state we serve from, but
-    under its own suffix so it can never collide with a POL resource path."""
+    """The record a member's collection is kept under (tmblob.py): scope the
+    member, path `tm_collection.json`, the old file name's two halves. Its own
+    path, so it can never collide with a POL resource the member stores."""
     if member_id is None:
         return None
-    return os.path.join(_collection_dir(), "%s%s" % (member_id, _COLLECTION_SUFFIX))
+    return "%s%s" % (member_id, _COLLECTION_SUFFIX)
 
 
 def _collection_load(member_id):
-    path = _collection_file(member_id)
-    if not path:
+    name = _collection_file(member_id)
+    if not name:
         return {}
     try:
-        with open(path) as f:
-            data = json.load(f)
-    except (OSError, ValueError):
+        data = tmblob.read_json(name)
+    except tmblob.errors():
         return {}
     return data if isinstance(data, dict) else {}
 
 
 def _save_resource_file(member_id):
-    """The member's `U/g/TM0DataFile`, named the way `responders._resource_file`
-    names it -- member-scoped, because a save is user-owned and is deliberately
-    NOT in `_SUBJECT_KEYED_PATHS`."""
+    """The record of the member's `U/g/TM0DataFile`, named the way the core's
+    `_resource_file` names it -- member-scoped, because a save is user-owned
+    and is deliberately NOT in `_SUBJECT_KEYED_PATHS`. The core serves this
+    same row."""
     if member_id is None:
         return None
-    return os.path.join(_collection_dir(), "%s.U_g_TM0DataFile.bin" % member_id)
+    return "%s.U_g_TM0DataFile.bin" % member_id
 
 
 def _collection_to_save(member_id, cards):
@@ -120,56 +109,59 @@ def _collection_to_save(member_id, cards):
     """
     if tmsave is None or os.environ.get("POL_TM_SAVE_WRITE", "1") != "1":
         return False
-    path = _save_resource_file(member_id)
-    if not path:
+    name = _save_resource_file(member_id)
+    if not name:
         return False
-    base = None
+    # Everything that does not come from the save itself is worked out FIRST,
+    # outside the save's lock: `money_of` may open the member's account, and
+    # that store rewrites this very save.
+    #
+    # MONEY GOES IN THE SAVE, not in SHOPINIT. `/M=` does not feed the shop's
+    # Money display -- measured 2026-08-18 by serving `/M=4321` and watching
+    # the screen stay at 87 across a shop exit and re-entry. The balance
+    # comes from the save header at `tmsave.MONEY_OFF`, which we had been
+    # writing as zeros, which is why every launch started the player at 0.
+    if _deck_slots_on():
+        # THE DECK SLOTS: byte 8 of every record is the card's position
+        # (255 = none), never the CardPrm column -- see DECK_SLOT_COUNT.
+        _data = _collection_load(member_id) or {}
+        _slots = _deck_slot_bytes(_data, cards)
+        cards = [(list(c) + [0] * 8)[:7] + [_slots[i]]
+                 for i, c in enumerate(cards)]
+    money = purse.money_of(member_id)
+    # WARNING: OFF BY DEFAULT since 2026-09-07: +0x104 is the FIRST DECK TAB's
+    # name, not the shop's pack label -- a tester's card screen read
+    # the week's champion there. `POL_TM_CHAMPION_SAVE_SLOT=1` restores
+    # the stamp; the shop's "<X>'s Pack" still rides `@Init=/SN=`.
+    # THE DECK SET NAMES, from the player's own `@Decks=` name report.
+    fields = sorted(_deck_name_fields(member_id).items())
+    if common._env_int("POL_TM_CHAMPION_SAVE_SLOT", 0):
+        _cn = shopdoors._champion_name()
+        if _cn:
+            fields.append((shopdoors.SAVE_OFF_CHAMPION,
+                           (shopdoors.SAVE_CHAMPION_WIDTH, _cn)))
+    # ONE TRANSACTION, holding the save's lock, from reading the header to
+    # writing the result: an `@Opt=` patch landing in between would otherwise
+    # be overwritten with the header read before it. A read error raises out
+    # of it and nothing is written -- rebuilding the save from a zero header
+    # is how a player's settings get destroyed.
     try:
-        with open(path, "rb") as f:
-            base = f.read()
-    except OSError:
-        pass
-    try:
-        # MONEY GOES IN THE SAVE, not in SHOPINIT. `/M=` does not feed the shop's
-        # Money display -- measured 2026-08-18 by serving `/M=4321` and watching
-        # the screen stay at 87 across a shop exit and re-entry. The balance
-        # comes from the save header at `tmsave.MONEY_OFF`, which we had been
-        # writing as zeros, which is why every launch started the player at 0.
-        if _deck_slots_on():
-            # THE DECK SLOTS: byte 8 of every record is the card's position
-            # (255 = none), never the CardPrm column -- see DECK_SLOT_COUNT.
-            _data = _collection_load(member_id) or {}
-            _slots = _deck_slot_bytes(_data, cards)
-            cards = [(list(c) + [0] * 8)[:7] + [_slots[i]]
-                     for i, c in enumerate(cards)]
-        blob = tmsave.build(cards, base, money=purse.money_of(member_id))
-        _buf = bytearray(blob)
-        # WARNING: OFF BY DEFAULT since 2026-09-07: +0x104 is the FIRST DECK TAB's
-        # name, not the shop's pack label -- a tester's card screen read
-        # the week's champion there. `POL_TM_CHAMPION_SAVE_SLOT=1` restores
-        # the stamp; the shop's "<X>'s Pack" still rides `@Init=/SN=`.
-        # THE DECK SET NAMES, from the player's own `@Decks=` name report.
-        for _off, (_w, _val) in sorted(_deck_name_fields(member_id).items()):
-            tmsave.write_field(_buf, _off, _w, _val)
-        if common._env_int("POL_TM_CHAMPION_SAVE_SLOT", 0):
-            _cn = shopdoors._champion_name()
-            if _cn:
-                tmsave.write_field(_buf, shopdoors.SAVE_OFF_CHAMPION, shopdoors.SAVE_CHAMPION_WIDTH,
-                                   _cn)
-        blob = bytes(_buf)
-    except ValueError as e:
-        # encode_card refuses rows the client would SILENTLY drop. Say which,
-        # and leave the existing save alone rather than shipping a worse one.
-        common._say("tm: save NOT rewritten for member %s -- %s" % (member_id, e))
-        return False
-    try:
-        os.makedirs(_collection_dir(), exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "wb") as f:
-            f.write(blob)
-        os.replace(tmp, path)
-    except OSError as e:
-        common._say("tm: could not write %s: %s" % (path, e))
+        with tmblob.locked(name) as conn:
+            base = tmblob.read(name, conn=conn)
+            try:
+                _buf = bytearray(tmsave.build(cards, base, money=money))
+                for _off, (_w, _val) in fields:
+                    tmsave.write_field(_buf, _off, _w, _val)
+            except ValueError as e:
+                # encode_card refuses rows the client would SILENTLY drop. Say
+                # which, and leave the existing save alone rather than
+                # shipping a worse one.
+                common._say("tm: save NOT rewritten for member %s -- %s"
+                            % (member_id, e))
+                return False
+            tmblob.write(name, bytes(_buf), conn=conn)
+    except tmblob.errors() as e:
+        common._say("tm: could not write %s: %s" % (name, e))
         return False
     common._say("tm: member %s save rewritten -- %d card(s) at +0x%X, count at +0x%X"
           % (member_id, len(cards), tmsave.CARDS_OFF, tmsave.COUNT_OFF))
@@ -177,25 +169,20 @@ def _collection_to_save(member_id, cards):
 
 
 def _collection_store(member_id, data, sync_save=True):
-    path = _collection_file(member_id)
-    if not path:
+    name = _collection_file(member_id)
+    if not name:
         return False
     try:
-        os.makedirs(_collection_dir(), exist_ok=True)
-        # tmp + os.replace, like `_collection_to_save` above and `_save_patch`.
-        # This file is the wallet/collection OF RECORD (it also carries the
-        # durable staked_wager), and the old truncate-in-place write meant a
+        # One statement: a reader sees the old record or the new one. This is
+        # the wallet/collection OF RECORD (it also carries the durable
+        # staked_wager), and the file's old truncate-in-place write meant a
         # crash mid-write -- or two of this member's threads interleaving --
         # left corrupt JSON; `_collection_load` then returns {} and the NEXT
         # write persists the empty record: cards, money, stats silently reset
-        # (09-02 review M3). Per-writer tmp name for the same reason as the
-        # live-match marker's.
-        tmp = "%s.tmp.%d.%d" % (path, os.getpid(), threading.get_ident())
-        with open(tmp, "w") as f:
-            json.dump(data, f, indent=1, sort_keys=True)
-        os.replace(tmp, path)
-    except OSError as e:
-        common._say("tm: could not write %s: %s" % (path, e))
+        # (09-02 review M3).
+        tmblob.write_json(name, data, indent=1, sort_keys=True)
+    except tmblob.errors() as e:
+        common._say("tm: could not write %s: %s" % (name, e))
         return False
     # The JSON is our record; the SAVE is what the client actually reads. Keep
     # them in step here rather than at each call site, so nothing can record a

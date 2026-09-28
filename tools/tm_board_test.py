@@ -112,13 +112,18 @@ class AutoNet(FakeNet):
 
 
 def tree(root):
-    """{relative path: sha256} of every file under root."""
+    """{relative path: sha256} of every file under root, and {"blob:<name>":
+    sha256} of every stored record (tmblob.py) -- the game data the board
+    must never write."""
+    import tmblob
     out = {}
     for d, _dirs, files in os.walk(root):
         for f in files:
             p = os.path.join(d, f)
             with open(p, "rb") as fh:
                 out[os.path.relpath(p, root)] = hashlib.sha256(fh.read()).hexdigest()
+    for name in tmblob.names():
+        out["blob:" + name] = hashlib.sha256(tmblob.read(name)).hexdigest()
     return out
 
 
@@ -146,6 +151,7 @@ def setup(tmp):
                        3: [("Elena", True, {19: 2439, 5: 77}),
                            ("OldMaria", False, {19: 16})]})
     import tmauction
+    import tmblob
     import tmrank
     players = [
         {"name": "Lex", "rating": 400, "rating_last": 300, "prize_total": 12652,
@@ -178,43 +184,39 @@ def setup(tmp):
                    (6, {"games": 1, "score_total": 16, "tiles_total": 16, "tiled_games": 1,
                         "prize_week": 900, "last_played": NOW - 60,
                         "week_of": week, "week_games": 1})):
-        with open(os.path.join(res, "%d%s" % (m, tmrank.COLLECTION_SUFFIX)), "w") as fh:
-            json.dump({"cards": [], "money": 100, "rank": blk}, fh)
+        tmblob.write_json(tmrank.collection_name(m),
+                          {"cards": [], "money": 100, "rank": blk})
     import tmstore
     tmstore.Snapshot(tmstore.roster_key()).write(
         {"names": {"1": "Lex", "2": "Quinn", "4": "Star*Man", "5": "Idle",
                    "6": "OneGame"}})
     # the auction: two sellers' stores
-    exhibit = lambda m: os.path.join(res, "%d.U_g_TM0_EXHIBITLIST.bin" % m)   # noqa: E731
-    with open(exhibit(1), "wb") as fh:
-        fh.write(tmauction.build_record(ii(65, 90, 77, 1, 35, 0b10000001), "Lex", "", ai=21,
+    exhibit = lambda m: "%d.U_g_TM0_EXHIBITLIST.bin" % m   # noqa: E731
+    tmblob.write(exhibit(1),
+                 tmauction.build_record(ii(65, 90, 77, 1, 35, 0b10000001), "Lex", "", ai=21,
                                         sp=500, bi=50, ed=NOW - 7200,
                                         nc=NOW + 3 * 86400 + 5 * 3600 + 30, et=77, am=1)
                  + tmauction.build_record(ii(107, 60, 30, 0, 75), "Lex", "Corvin", ai=22,
                                           sp=1500, bi=100, ed=NOW - 3600, nc=NOW + 7210,
                                           et=3, am=0, cm=1800, bc=2))
-    with open(exhibit(3), "wb") as fh:
-        fh.write(tmauction.build_record(ii(21, 33, 25, 2, 20), "Elena", "Lex", ai=23, sp=80,
+    tmblob.write(exhibit(3),
+                 tmauction.build_record(ii(21, 33, 25, 2, 20), "Elena", "Lex", ai=23, sp=80,
                                         bi=10, ed=NOW - 2 * 86400, nc=NOW - 60, et=48, am=0,
                                         cm=150, bc=1)
                  + tmauction.build_record(ii(1, 5, 5, 0, 5), "Elena", "", ai=24, sp=80, bi=10,
                                           ed=NOW - 3 * 86400, nc=NOW - 600, et=48, am=0))
-    bids = lambda ai: os.path.join(res, "auction-%d.bids.bin" % ai)   # noqa: E731
-    with open(bids(22), "wb") as fh:
-        fh.write(tmauction.build_bid("Quinn", 1600, NOW - 3000, 2)
+    bids = lambda ai: "auction-%d.bids.bin" % ai   # noqa: E731
+    tmblob.write(bids(22), tmauction.build_bid("Quinn", 1600, NOW - 3000, 2)
                  + tmauction.build_bid("Corvin", 1800, NOW - 1000, 5))
-    with open(bids(23), "wb") as fh:
-        fh.write(tmauction.build_bid("Lex", 150, NOW - 4000, 1))
+    tmblob.write(bids(23), tmauction.build_bid("Lex", 150, NOW - 4000, 1))
     # a FINISHED auction's bids under a reused id: older than listing 21
-    with open(bids(21), "wb") as fh:
-        fh.write(tmauction.build_bid("Ghost", 999, NOW - 90000, 9))
+    tmblob.write(bids(21), tmauction.build_bid("Ghost", 999, NOW - 90000, 9))
     # per-request STAGED copies and settlement bookkeeping: never the store
     decoy = tmauction.build_record(ii(200, 1, 1, 0, 1), "Ghost", "", ai=99, sp=1, nc=NOW + 99999)
     for n in ("1.U_g_TM0_AUCLIST.bin", "1.U_g_TM0_BIDLIST.bin"):
-        with open(os.path.join(res, n), "wb") as fh:
-            fh.write(decoy)
-    with open(os.path.join(res, "auction-pending-3.json"), "w") as fh:
-        json.dump({"money": 400, "cards": [], "won": [], "refund": 0}, fh)
+        tmblob.write(n, decoy)
+    tmblob.write_json("auction-pending-3.json",
+                      {"money": 400, "cards": [], "won": [], "refund": 0})
     # the live-match marker, stamped 30 s before the suite's clock
     import live_sessions
     from polcore import kv
@@ -898,7 +900,9 @@ def main():
           after == before, sorted(set(after.items()) ^ set(before.items()))[:6])
 
     print("an unpublished list")
-    os.remove(os.path.join(res, "tmrank", "U_g_TM0_RANKLIST1.bin"))
+    import tmblob
+    import tmrank
+    tmblob.delete(tmrank.store_file("U/g/TM0_RANKLIST1"))
     boardtm._SNAP.update(t=0.0, snap=None)
     s2 = boardtm.snapshot(now=NOW)
     check("a missing list is 'not published', never the fixture's zero row",

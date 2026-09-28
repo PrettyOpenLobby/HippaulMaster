@@ -41,6 +41,7 @@ def setup(tmp):
     # the live-match marker stays in this process's own store
     os.environ.pop("POL_VALKEY_URL", None)
     import tmauction
+    import tmblob
     import tmrank
     now = int(time.time())
     players = [{"name": n, "rating": 400 - 23 * i, "rating_last": 390 - 21 * i,
@@ -52,10 +53,12 @@ def setup(tmp):
                                                tmrank.next_update(now))
     tmrank.write_store(files)
     for i, n in enumerate(NAMES):
-        with open(os.path.join(res, "%d.tm_collection.json" % (i + 1)), "w") as fh:
-            json.dump({"rank": {"games": 3 + i, "score_total": 40 - 2 * i, "tiles_total": 50,
-                                "prize_week": 100 * i, "last_played": now - 60,
-                                "week_of": tmrank.week_start(now), "week_games": 1 + i % 4}}, fh)
+        tmblob.write_json(tmrank.collection_name(i + 1),
+                          {"rank": {"games": 3 + i, "score_total": 40 - 2 * i,
+                                    "tiles_total": 50, "prize_week": 100 * i,
+                                    "last_played": now - 60,
+                                    "week_of": tmrank.week_start(now),
+                                    "week_games": 1 + i % 4}})
     import tmstore
     tmstore.Snapshot(tmstore.roster_key()).write(
         {"names": {str(i + 1): n for i, n in enumerate(NAMES)}})
@@ -68,15 +71,13 @@ def setup(tmp):
             ed=now - 3600 * (k + 1), nc=now + 3600 * (5 + 17 * k), et=24, am=0, cm=cm,
             bc=1 if cm else 0))
         if cm:
-            with open(os.path.join(res, "auction-%d.bids.bin" % (40 + k)), "wb") as fh:
-                fh.write(tmauction.build_bid(NAMES[k + 3], cm, now - 600 * k, k + 4))
+            tmblob.write("auction-%d.bids.bin" % (40 + k),
+                         tmauction.build_bid(NAMES[k + 3], cm, now - 600 * k, k + 4))
     recs.append(tmauction.build_record([30, 0, 0, 0, 0, 0, 0, 0, 20, 20, 0, 20, 1, 3, 0, 0],
                                        "Lex", "Quinn", ai=60, sp=100, bi=10, ed=now - 90000,
                                        nc=now - 300, et=24, am=0, cm=250, bc=1))
-    with open(os.path.join(res, "auction-60.bids.bin"), "wb") as fh:
-        fh.write(tmauction.build_bid("Quinn", 250, now - 2000, 12))
-    with open(os.path.join(res, "11.U_g_TM0_EXHIBITLIST.bin"), "wb") as fh:
-        fh.write(b"".join(recs))
+    tmblob.write("auction-60.bids.bin", tmauction.build_bid("Quinn", 250, now - 2000, 12))
+    tmblob.write("11.U_g_TM0_EXHIBITLIST.bin", b"".join(recs))
     import boardtm
     import live_sessions
     live_sessions.write_marker(boardtm.MATCHES_MARKER, 2)
@@ -87,6 +88,9 @@ def main(argv=None):
     ap.add_argument("--shots", default=tempfile.mkdtemp(prefix="tm-board-shots-"))
     o = ap.parse_args(argv)
     os.makedirs(o.shots, exist_ok=True)
+    import tmpg
+    if tmpg.fresh_database() is None:       # the records are rows of the blob table
+        return tmpg.skip_or_fail("tm_board_browser")
     tmp = tempfile.mkdtemp(prefix="tm-board-browser-")
     setup(tmp)
     import boardtm

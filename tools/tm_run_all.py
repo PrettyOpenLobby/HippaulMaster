@@ -72,10 +72,15 @@ SUITES = [
 
 
 #: suites that get a fresh PostgreSQL database of their own (see the docstring):
-#: this repository's store suite, the board suites (the names and portraits
-#: come from the account tables), and the core's resource suite, whose
-#: accounts live in PostgreSQL too
-NEEDS_DB = {"tm_store", "tm_board", "tm_faces", "core_resource"}
+#: every suite that reads or writes a member's collection, save, prize record,
+#: the auction's records or the ranking lists (tmblob.py: they are rows of the
+#: core's blob table), this repository's store suite, the board suites (the
+#: names and portraits come from the account tables), and the core's resource
+#: suite, whose accounts live in PostgreSQL too
+NEEDS_DB = {"tetramaster", "tmrank", "tm_backfill", "tm_auction_mint",
+            "tm_watch", "tm_board", "tm_faces", "tm_gameea_refuse",
+            "tm_lobby_counts", "tm_roster_delta_base", "tm_roster_retire",
+            "tm_save_defaults", "tm_store", "core_resource"}
 
 
 def _fresh_database():

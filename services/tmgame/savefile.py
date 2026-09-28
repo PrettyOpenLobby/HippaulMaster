@@ -3,6 +3,7 @@ profile fields.
 """
 import os
 import re
+import tmblob
 from .deps import tmsave
 from . import common
 
@@ -24,47 +25,40 @@ SAVE_OFF_GUILD = 0x3B
 
 
 def _save_file(member_id):
-    """The stored save blob for one member -- the name `_resource_file` builds.
+    """The record name of one member's save -- the name the core's
+    `_resource_file` builds, so this module patches the very row the lobby
+    serves (tmblob.py: scope the member, path `U_g_TM0DataFile.bin`).
 
-    WARNING: Resolve the directory the way `responders.RESOURCE_DIR` does, POL_RESOURCE_DIR
-    FIRST. Deriving it from POL_DATA_DIR alone agrees today only because nothing
-    sets the override; the day something does, we would write a save the lobby
-    never reads and the guild screen would come back with nothing in the log to
-    say why.
+    WARNING: IT MUST STAY THE CORE'S NAME. A save written under any other name
+    is one the lobby never reads, and the guild screen would come back with
+    nothing in the log to say why.
     """
-    root = os.environ.get("POL_RESOURCE_DIR")
-    if not root:
-        root = os.path.join(os.environ.get("POL_DATA_DIR", "/data"), "resources")
-    return os.path.join(root, "%s.U_g_TM0DataFile.bin" % member_id)
+    return "%s.U_g_TM0DataFile.bin" % member_id
 
 
 def _save_patch(member_id, off, value):
     """Set one byte of a member's save, creating the blob if it does not exist.
 
-    Returns (old, new) or None if nothing was written. Atomic: the replace is
-    what the lobby's next read sees, so a torn file can never be served.
+    Returns (old, new) or None if nothing was written. One transaction holding
+    the save's lock (tmblob.locked), so a torn save can never be served and a
+    concurrent rewrite cannot slip in between the read and the write.
     """
     if member_id is None:
         return None
-    path = _save_file(member_id)
+    name = _save_file(member_id)
     try:
-        with open(path, "rb") as f:
-            buf = bytearray(f.read())
-    except OSError:
-        buf = bytearray(_SAVE_FILE_LEN)      # a fresh player: all zeros
-    if len(buf) < _SAVE_FILE_LEN:
-        buf.extend(b"\x00" * (_SAVE_FILE_LEN - len(buf)))
-    old = buf[off]
-    if old == value:
-        return None                          # already right; do not churn the file
-    buf[off] = value & 0xFF
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "wb") as f:
-            f.write(buf)
-        os.replace(tmp, path)                # atomic
-    except OSError:
+        with tmblob.locked(name) as conn:
+            raw = tmblob.read(name, conn=conn)
+            # a fresh player: all zeros
+            buf = bytearray(raw if raw is not None else _SAVE_FILE_LEN)
+            if len(buf) < _SAVE_FILE_LEN:
+                buf.extend(b"\x00" * (_SAVE_FILE_LEN - len(buf)))
+            old = buf[off]
+            if old == value:
+                return None                  # already right; do not churn the save
+            buf[off] = value & 0xFF
+            tmblob.write(name, bytes(buf), conn=conn)
+    except tmblob.errors():
         return None
     return old, value & 0xFF
 
@@ -95,7 +89,7 @@ def _save_patch_fields(member_id, changes):
     `mov eax, dword ptr [...]`. Writing `au=300` as a byte stores 44, and a rank
     band of 0..44 refuses everybody exactly the way 0..0 did.
 
-    Same file, same atomic replace as `_save_patch` --
+    Same record, same locked transaction as `_save_patch` --
     that is the one-byte case of this, and the two should fold together when
     whoever owns this file next touches it; kept separate today only because
     `_save_patch` was in flight uncommitted when this landed.
@@ -132,11 +126,26 @@ def _save_patch_fields(member_id, changes):
               "DISCARDED. The client was told /Ans=1, so it believes they were "
               "saved and will not resend them." % len(changes))
         return {}
-    path = _save_file(member_id)
+    name = _save_file(member_id)
     try:
-        with open(path, "rb") as f:
-            buf = bytearray(f.read())
-    except FileNotFoundError:
+        with tmblob.locked(name) as conn:
+            return _save_patch_fields_in(member_id, changes, name, conn)
+    except tmblob.errors() as exc:
+        # WARNING: NEVER FALL BACK TO ZEROS ON A READ ERROR. The old code did, so
+        # a permissions or I/O fault would have rebuilt the save from nothing
+        # and written a ZERO HEADER over a good one -- turning a transient error
+        # into the exact bug `tmsave.DEFAULT_HEADER` documents. A failed read
+        # or write lands here, and nothing was written.
+        common._say("tm: member %s save WRITE FAILED (%r) -- %d setting(s) lost. The "
+              "client was told /Ans=1 and will not resend them."
+              % (member_id, exc, len(changes)))
+        return {}
+
+
+def _save_patch_fields_in(member_id, changes, name, conn):
+    """The body of `_save_patch_fields`, inside its transaction."""
+    raw = tmblob.read(name, conn=conn)
+    if raw is None:
         # A player with no save yet. Mint one the way `tmsave.build` does, so a
         # first-ever settings write does not create the zero header that
         # `tmsave.DEFAULT_HEADER` exists to prevent.
@@ -146,15 +155,8 @@ def _save_patch_fields(member_id, changes):
                 tmsave.write_field(buf, off, width, val)
         common._say("tm: member %s has no save; minting one with the default header "
               "before applying %d setting(s)" % (member_id, len(changes)))
-    except OSError as exc:
-        # WARNING: NEVER FALL BACK TO ZEROS ON A READ ERROR. The old code did, so a
-        # permissions or I/O fault would have rebuilt the save from nothing and
-        # written a ZERO HEADER over a good one -- turning a transient error into
-        # the exact bug `tmsave.DEFAULT_HEADER` documents.
-        common._say("tm: member %s save is UNREADABLE (%r) -- refusing to write, "
-              "because rebuilding it from zeros is how settings get destroyed"
-              % (member_id, exc))
-        return {}
+    else:
+        buf = bytearray(raw)
     if len(buf) < _SAVE_FILE_LEN:
         buf.extend(b"\x00" * (_SAVE_FILE_LEN - len(buf)))
     moved = {}
@@ -165,20 +167,8 @@ def _save_patch_fields(member_id, changes):
         if got:
             moved[off] = got
     if not moved:
-        return {}                            # already right; do not churn the file
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "wb") as f:
-            f.write(buf)
-        os.replace(tmp, path)                # atomic
-    except OSError as exc:
-        # The resources directory is root-owned on prod; a container that cannot
-        # write it silently threw away every setting the player changed.
-        common._say("tm: member %s save WRITE FAILED (%r) -- %d setting(s) lost. The "
-              "client was told /Ans=1 and will not resend them."
-              % (member_id, exc, len(moved)))
-        return {}
+        return {}                            # already right; do not churn the save
+    tmblob.write(name, bytes(buf), conn=conn)
     return moved
 
 

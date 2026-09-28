@@ -31,11 +31,14 @@ derivation that IS safe is the VS. Rating, from `score_total`/`games`, and
 save cannot disagree.
 
 WARNING: **SAFE TO RUN TWICE.** `_save_patch_fields` returns only the fields that
-actually moved and skips the file write entirely when nothing did, so a second
+actually moved and skips the write entirely when nothing did, so a second
 run reports zero changes and rewrites nothing.
+
+The collections and saves are rows of the core's blob table (tmblob.py), so it
+runs where POL_DATABASE_URL reaches the stack's PostgreSQL, for example
+`docker compose exec login python tools/tm_stats_backfill.py --dry-run`.
 """
 import argparse
-import json
 import os
 import sys
 
@@ -46,16 +49,9 @@ import tmrank                                                    # noqa: E402
 import tmsave                                                    # noqa: E402
 
 
-def _members(resource_dir):
-    """Every member id with a collection file, in a stable order."""
-    out = []
-    try:
-        for fn in sorted(os.listdir(resource_dir)):
-            if fn.endswith(tmrank.COLLECTION_SUFFIX):
-                out.append(fn[:-len(tmrank.COLLECTION_SUFFIX)])
-    except OSError as exc:
-        sys.stderr.write("cannot list %s: %s\n" % (resource_dir, exc))
-    return out
+def _members():
+    """Every member id with a collection record, in a stable order."""
+    return tmrank.collection_members()
 
 
 def _describe(block):
@@ -66,7 +62,8 @@ def _describe(block):
 
 
 def selftest():
-    """0 = pass. Builds its own fixtures; touches nothing real.
+    """0 = pass. Builds its own fixtures in a throwaway database (tmpg.py);
+    touches nothing real.
 
     Guards the two things a repair tool silently loses: that it still reaches
     `_save_sync_stats` at all (a signature change would otherwise break it
@@ -75,6 +72,11 @@ def selftest():
     """
     import struct
     import tempfile
+    sys.path.insert(0, HERE)
+    import tmpg
+    if tmpg.fresh_database() is None:
+        return tmpg.skip_or_fail("tm_stats_backfill")
+    import tmblob
     tmp = tempfile.mkdtemp(prefix="tm-backfill-")
     res = os.path.join(tmp, "resources")
     os.makedirs(res)
@@ -86,8 +88,8 @@ def selftest():
             "opponents": 8, "consec_wins": 3, "streak": 5}
     legacy = {"games": 4, "score_total": 40, "prize_total": 250}
     for mid, blk in (("16", full), ("7", legacy)):
-        with open(os.path.join(res, mid + tmrank.COLLECTION_SUFFIX), "w") as fh:
-            json.dump({"cards": [], "money": 51000, "rank": blk}, fh)
+        tmblob.write_json(tmrank.collection_name(mid),
+                          {"cards": [], "money": 51000, "rank": blk})
     bad = []
 
     def check(cond, what):
@@ -97,13 +99,12 @@ def selftest():
 
     rc = main(["--dry-run"])
     check(rc == 0, "--dry-run exits 0")
-    check(not os.path.exists(os.path.join(res, "16.U_g_TM0DataFile.bin")),
+    check(not tmblob.exists("16.U_g_TM0DataFile.bin"),
           "--dry-run must write NOTHING")
     check(main([]) == 0, "the real run exits 0")
 
     import tetramaster
-    with open(tetramaster._save_file("16"), "rb") as fh:
-        blob = fh.read()
+    blob = tmblob.read(tetramaster._save_file("16"))
     w = lambda o: struct.unpack_from("<H", blob, o)[0]      # noqa: E731
     d = lambda o: struct.unpack_from("<I", blob, o)[0]      # noqa: E731
     check(d(tmsave.AVG_RANK_OFF) == 150, "a full block delivers Average Rank")
@@ -114,8 +115,7 @@ def selftest():
     check(d(tmsave.RATING_OFF) == tmrank.rating_of(full),
           "VS. Rating is delivered (tmrank.rating_of: 1.00 + 3.00 x board share)")
 
-    with open(tetramaster._save_file("7"), "rb") as fh:
-        old = fh.read()
+    old = tmblob.read(tetramaster._save_file("7"))
     check(struct.unpack_from("<I", old, tmsave.AVG_RANK_OFF)[0] == 0,
           "a block with NO place_total must leave Average Rank unwritten -- "
           "inventing it fabricates the number every title is gated on")
@@ -126,10 +126,10 @@ def selftest():
           "it, so the two cannot disagree")
 
     # Idempotence: the second run must move nothing and rewrite nothing.
-    before = os.path.getmtime(tetramaster._save_file("16"))
+    before = tmblob.mtime(tetramaster._save_file("16"))
     check(main([]) == 0, "a second run exits 0")
-    check(os.path.getmtime(tetramaster._save_file("16")) == before,
-          "a second run must not rewrite the file (_save_patch_fields skips "
+    check(tmblob.mtime(tetramaster._save_file("16")) == before,
+          "a second run must not rewrite the save (_save_patch_fields skips "
           "the write when nothing moved)")
 
     print("tm_stats_backfill: %d check(s) failed" % len(bad) if bad
@@ -159,10 +159,9 @@ def main(argv=None):
                          % (exc,))
         return 2
 
-    root = tetramaster._collection_dir()
-    ids = args.members or _members(root)
+    ids = args.members or _members()
     if not ids:
-        print("no collection files under %s -- nothing to back-fill" % root)
+        print("no collection records -- nothing to back-fill")
         return 0
 
     if args.dry_run:
@@ -173,12 +172,10 @@ def main(argv=None):
         preview = {}
 
         def _fake(member_id, changes):
+            import tmblob
             cur = {}
-            try:
-                with open(tetramaster._save_file(member_id), "rb") as fh:
-                    buf = bytearray(fh.read())
-            except OSError:
-                buf = bytearray(tetramaster._SAVE_FILE_LEN)
+            raw = tmblob.read(tetramaster._save_file(member_id))
+            buf = bytearray(raw if raw is not None else tetramaster._SAVE_FILE_LEN)
             if len(buf) < tetramaster._SAVE_FILE_LEN:
                 buf.extend(b"\x00" * (tetramaster._SAVE_FILE_LEN - len(buf)))
             for off, (width, value) in sorted(changes.items()):

@@ -5,6 +5,7 @@ import os
 import struct
 import time
 import tetramaster
+import tmblob
 from . import corenames, templates, zones
 
 
@@ -223,11 +224,11 @@ def _tm_event_room_list(path, n, subject):
         return None
     # RAW zone-0 list, not `_resource_blob`: its live-count patch records a
     # b/g/RL fetch as ENTERING that zone, and this player is entering ours.
-    base = b""
     try:
-        with open(corenames._resource_read_file("b/g/RL000", subject), "rb") as f:
-            base = f.read()
-    except OSError:
+        base = tmblob.read(corenames._resource_read_file("b/g/RL000", subject))
+    except tmblob.errors():
+        base = None
+    if base is None:
         base = templates._tm_template_blob("b/g/RL000") or b""
     try:
         zones._note_zone_presence(zid)
