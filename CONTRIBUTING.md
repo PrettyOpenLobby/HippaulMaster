@@ -145,7 +145,10 @@ checked out beside this repository (or `OPENLOBBY_SERVICES` pointing at its
 `services/`). The board suites need the art baked from your install
 (`tools/tm_boardart_bake.py`) and skip until it is. A suite that finds no
 `POL_DATA_DIR` falls back to `/data`, which on Windows is the root of the
-current drive; point `POL_DATA_DIR` at a scratch folder to keep runs apart.
+current drive, so `tm_run_all.py` points `POL_DATA_DIR`, `POL_RESOURCE_DIR`,
+`POL_LOG_DIR` and `POL_LOGIN_PW_KEYFILE` into a temporary directory of its
+own when they are not set, and removes it at the end. A value you set
+yourself is used as it is.
 GitHub Actions runs the same commands on every pull request.
 
 Every suite imports the core's `polcore`, so the core has to be found for
