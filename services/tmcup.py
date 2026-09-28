@@ -202,34 +202,38 @@ def event_phase(now=None):
     return "closed", start, end
 
 
-def moment_file():
-    return os.path.join(os.environ.get("POL_DATA_DIR", "/data"), "tm-event-live.json")
+#: The tournament's latest moment, written by the game server and read by the
+#: ticker in both processes: the Valkey key `tm:event-live` (it was the file
+#: `<POL_DATA_DIR>/tm-event-live.json`). Live state: it expires after
+#: MOMENT_TTL_S, past the longest age any reader accepts.
+MOMENT_TTL_S = 3600
+
+
+def moment_key():
+    return os.environ.get("POL_TM_EVENT_LIVE_KEY", "tm:event-live")
 
 
 def note_moment(event_id, text, now=None):
     """The latest thing that happened in this event, for the ticker and the
     website (written by the game server, read by both)."""
-    import json
-    path = moment_file()
     try:
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"id": event_id, "moment": text,
-                       "at": time.time() if now is None else now}, f)
-        os.replace(tmp, path)
-    except OSError:
+        import tmstore
+        tmstore.kv.set_json(moment_key(),
+                            {"id": event_id, "moment": text,
+                             "at": time.time() if now is None else now},
+                            ttl=MOMENT_TTL_S)
+    except Exception:                                        # noqa: BLE001
         pass
 
 
 def last_moment(event_id, max_age=900, now=None):
-    import json
     now = time.time() if now is None else now
     try:
-        with open(moment_file(), encoding="utf-8") as f:
-            d = json.load(f)
+        import tmstore
+        d = tmstore.kv.get_json(moment_key()) or {}
         if d.get("id") == event_id and now - float(d.get("at", 0)) < max_age:
             return str(d.get("moment") or "")
-    except (OSError, ValueError):
+    except Exception:                                        # noqa: BLE001
         pass
     return ""
 

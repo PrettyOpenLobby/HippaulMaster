@@ -3,8 +3,8 @@ and the seat heartbeat.
 """
 import json
 import os
-import threading
 import time
+import tmstore
 from . import (
     boardrules, common, matchstart, peers, pots, protocol, pushqueue, rematch, scoring, seating,
     tableaudit, tablesettings, turns, vscom, webwatch,
@@ -527,65 +527,89 @@ _BOT_SYNTH = set()
 #: whole Start Game -> deal window reported count 0 (`_live_matches_write` now
 #: runs at `@GameReady=` / `@GameOK=` too, and counts pending accepts).
 #:
-#: So each accept is ALSO written here, keyed by table, with the roster it was
-#: given against and a stamp; `_note_accept` adopts a fresh entry when this
-#: process holds nothing for that table and the file's roster still matches.
-#: A stale entry (older than POL_TM_ACCEPT_TTL_S, default 600 s) is ignored --
-#: an accept from yesterday's game must not start today's. Cleared on quorum,
-#: on a fresh announcement (`_remember_match`) and on a rematch reset.
+#: So each accept is ALSO kept outside the process, keyed by table, with the
+#: roster it was given against and a stamp; `_note_accept` adopts a fresh entry
+#: when this process holds nothing for that table and the stored roster still
+#: matches. A stale entry (older than POL_TM_ACCEPT_TTL_S, default 600 s) is
+#: ignored -- an accept from yesterday's game must not start today's. Cleared on
+#: quorum, on a fresh announcement (`_remember_match`) and on a rematch reset.
 #: `POL_TM_ACCEPT_PERSIST=0` disables both the write and the adopt.
-_ACCEPTS_FILE = "tm-match-accepts.json"
+#:
+#: Where: the Valkey hash `tm:match-accepts` (it was the file
+#: `<POL_DATA_DIR>/tm-match-accepts.json`), one field per table. It is live
+#: state; the hash expires POL_TM_ACCEPT_TTL_S after its last write, since no
+#: entry is worth adopting after that anyway.
+_ACCEPTS_FILE = "tm:match-accepts"
 
 
 def _accepts_path():
-    return os.path.join(os.environ.get("POL_DATA_DIR", "/data"), _ACCEPTS_FILE)
+    """The live key the accept sets are kept under."""
+    return os.environ.get("POL_TM_ACCEPTS_KEY", _ACCEPTS_FILE)
 
 
 def _accepts_key(chan, index):
     return "%s|%s" % (chan, index)
 
 
+def _accepts_ttl():
+    return max(1, common._env_int("POL_TM_ACCEPT_TTL_S", 600))
+
+
 def _accepts_load():
     try:
-        with open(_accepts_path()) as f:
-            got = json.load(f)
-        return got if isinstance(got, dict) else {}
-    except (OSError, ValueError):
+        got = tmstore.kv.hgetall(_accepts_path())
+    except Exception as exc:                     # noqa: BLE001 -- Valkey away
+        common._say("tm:   accept quorum store unreadable (%r)" % (exc,))
         return {}
+    out = {}
+    for field, raw in (got or {}).items():
+        try:
+            entry = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(entry, dict):
+            out[field] = entry
+    return out
 
 
 def _accepts_store(data):
-    path = _accepts_path()
+    """Replace every table's entry with `data` ({table key: entry})."""
+    key = _accepts_path()
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = "%s.tmp.%d.%d" % (path, os.getpid(), threading.get_ident())
-        with open(tmp, "w") as f:
-            json.dump(data, f)
-        os.replace(tmp, path)
-    except OSError as exc:
+        tmstore.kv.delete(key)
+        if data:
+            tmstore.kv.hset(key, mapping={k: json.dumps(v) for k, v in data.items()})
+            tmstore.kv.expire(key, _accepts_ttl())
+    except Exception as exc:                     # noqa: BLE001 -- Valkey away
         common._say("tm:   accept quorum NOT persisted (%r) -- a restart before the "
              "deal loses it" % (exc,))
 
 
 def _accepts_persist(chan, index, got, need):
-    """Write one table's accept set beside the roster it was taken against."""
+    """Keep one table's accept set beside the roster it was taken against."""
     if not common._env_int("POL_TM_ACCEPT_PERSIST", 1):
         return
-    data = _accepts_load()
-    data[_accepts_key(chan, index)] = {
+    key = _accepts_path()
+    entry = {
         "stamp": time.time(),
         "got": sorted(str(k) for k in got),
         "need": sorted(str(k) for k in need),
     }
-    _accepts_store(data)
+    try:
+        tmstore.kv.hset(key, _accepts_key(chan, index), json.dumps(entry))
+        tmstore.kv.expire(key, _accepts_ttl())
+    except Exception as exc:                     # noqa: BLE001 -- Valkey away
+        common._say("tm:   accept quorum NOT persisted (%r) -- a restart before the "
+             "deal loses it" % (exc,))
 
 
 def _accepts_forget(chan, index):
     if not common._env_int("POL_TM_ACCEPT_PERSIST", 1):
         return
-    data = _accepts_load()
-    if data.pop(_accepts_key(chan, index), None) is not None:
-        _accepts_store(data)
+    try:
+        tmstore.kv.hdel(_accepts_path(), _accepts_key(chan, index))
+    except Exception as exc:                     # noqa: BLE001 -- Valkey away
+        common._say("tm:   accept quorum entry not cleared (%r)" % (exc,))
 
 
 def _accepts_adopt(chan, index, need):

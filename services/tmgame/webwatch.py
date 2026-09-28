@@ -1,10 +1,11 @@
-"""The files the web board reads: the live-match marker (deploy gate) and the watch file of matches
-in progress.
+"""What the web board reads: the live-match marker (deploy gate) and the matches in progress
+(the watch document, in Valkey under tmstore.watch_key()).
 """
 import json
 import os
 import threading
 import tmbattle
+import tmstore
 import time
 from . import (
     boardrules, common, matchmaking, matchstart, placement, pushqueue, rematch, shopdoors,
@@ -105,11 +106,12 @@ def _live_matches_write():
 
 
 # ---------------------------------------------------------------------------
-# THE WEB WATCH FILE -- `<POL_DATA_DIR>/tm-tables-live.json` (2026-09-13)
+# THE WEB WATCH DOCUMENT -- Valkey `tm:tables-live` (2026-09-13; it was the file
+# `<POL_DATA_DIR>/tm-tables-live.json` until the move to polcore.kv)
 #
-# The board service (services/boardtm.py: its own container, /data read-only)
-# draws live matches at tm.example.com/watch, and it cannot see this process,
-# so this process publishes them -- as the server owner chose on 2026-09-13:
+# The board service (services/boardtm.py: its own container) draws live
+# matches at tm.example.com/watch, and it cannot see this process, so this
+# process publishes them -- as the server owner chose on 2026-09-13:
 #
 #   * only tables whose creator allows observing: `@Tab=/in=` 0 "Possible"
 #     (the client's own default) or 2 "No Comments Allowed". 1 "Impossible"
@@ -123,7 +125,7 @@ def _live_matches_write():
 # Shape: {"stamp": epoch, "tables": {"<room>-<table>": {"watchable": bool,
 # "state": {...}}}}, written on change (at most once a second, and at once
 # after a move) and at least every WATCH_EVERY_S, so a stale stamp means this
-# process is gone. The state carries the MOVES of the game -- each
+# process is gone; the key expires WATCH_TTL_S after the last write as well. The state carries the MOVES of the game -- each
 # placement's battles (the rolls the players were shown), the tiles that
 # changed hands (after a won battle, the game's COMBO) and a chance block's
 # effect -- recorded where every placement path ends (`_note_combo`), so the
@@ -131,12 +133,15 @@ def _live_matches_write():
 #
 # WARNING: IT MUST NEVER COST A MATCH: every entry point swallows every exception
 # (logged once), reads the match dicts through copies, and writes nothing but
-# this one file. And only a process that HOLDS a match writes it -- the login
+# this one key. And only a process that HOLDS a match writes it -- the login
 # container imports this module too, and its empty dicts must never overwrite
-# authsess's file. POL_TM_WATCH_FILE=0 turns it off (or names another file);
+# authsess's document. POL_TM_WATCH_KEY=0 turns it off (or names another key);
 # POL_TM_WEB_WATCH=0 keeps writing it with every table unwatchable.
 # ---------------------------------------------------------------------------
 WATCH_EVERY_S = 5.0
+#: the key outlives its last write by this long; the board calls a document
+#: older than its own WATCH_STALE_S (60 s) gone anyway
+WATCH_TTL_S = 120
 WATCH_STEPS_MAX = 40
 _WATCH = {"t": 0.0, "body": None, "owner": False, "whined": False}
 #: match key -> {"rec": its _MATCH_TURN dict, "steps": [...], "seq": n, "began": t}
@@ -148,12 +153,8 @@ _WATCH_LOCK = threading.RLock()
 
 
 def _watch_file():
-    name = (os.environ.get("POL_TM_WATCH_FILE") or "tm-tables-live.json").strip()
-    if name in ("", "0", "off"):
-        return None
-    if os.path.isabs(name):
-        return name
-    return os.path.join(os.environ.get("POL_DATA_DIR", "/data"), name)
+    """The key the watch document is published under, or None when it is off."""
+    return tmstore.watch_key()
 
 
 def _watch_whine(what, e):
@@ -458,10 +459,10 @@ def _watch_tables():
 
 
 def _watch_publish(force=False):
-    """Write the file: on change (at most once a second, unless `force`) or
-    every WATCH_EVERY_S. Never raises."""
-    path = _watch_file()
-    if not path or not _WATCH["owner"]:
+    """Publish the document: on change (at most once a second, unless `force`)
+    or every WATCH_EVERY_S. Never raises."""
+    key = _watch_file()
+    if not key or not _WATCH["owner"]:
         return
     now = time.time()
     if not force and now - _WATCH["t"] < 1.0:
@@ -472,10 +473,8 @@ def _watch_publish(force=False):
         body = json.dumps(tables, sort_keys=True, separators=(",", ":"))
         if body == _WATCH["body"] and now - _WATCH["t"] < WATCH_EVERY_S:
             return
-        tmp = "%s.tmp.%d.%d" % (path, os.getpid(), threading.get_ident())
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write('{"stamp":%.3f,"tables":%s}' % (now, body))
-        os.replace(tmp, path)
+        tmstore.kv.set(key, '{"stamp":%.3f,"tables":%s}' % (now, body),
+                       ttl=WATCH_TTL_S)
         _WATCH.update(t=now, body=body)
     except RuntimeError:
         return                     # a match dict changed under us: next beat

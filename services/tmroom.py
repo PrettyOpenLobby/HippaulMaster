@@ -36,14 +36,18 @@ this module already maintains is what those deltas number.
 
 TWO CONTAINERS, ONE ROSTER. The records arrive on the AUTH band (`authsess`) and
 `b/g/PTL` is served on the LOBBY band (`login`) -- different processes. So this
-uses the same owner-guarded snapshot-file idiom as `responders._publish_rooms`:
-only the process that MUTATES writes, a pure reader can never clobber it with its
-own empty view.
+uses an owner-guarded published snapshot: only the process that MUTATES writes,
+a pure reader can never clobber it with its own empty view. The snapshot lives
+in Valkey under `tm:roster` (tmstore.Snapshot; POL_TM_ROSTER_KEY names another
+key), where it was once `<POL_DATA_DIR>/tm-roster.json`. It is live state: a
+Valkey restart loses it the way a room loses its players, and nothing else.
 """
 import json
 import os
 import struct
 import threading
+
+import tmstore
 
 #: Container geometry -- measured, and identical in `tools/tmptl.py`, which
 #: derived it from the PC `<DE>` serialiser at 0x1A3340 while `cp.c`'s parser
@@ -304,10 +308,10 @@ _POLIDS = {}           # member_id -> Tetra Master's POL-ID, see note_pol_id
 #: fourteen `@Tet=`/`@Tab=` fields its owner last chose. See `note_table_rules`.
 _RULES = {}
 _OWNER = [False]
-_FILE = os.environ.get(
-    "POL_TM_ROSTER_FILE",
-    os.path.join(os.environ.get("POL_DATA_DIR", "/data"), "tm-roster.json"))
-_CACHE = {"mtime": -1.0, "data": {}}
+#: The live key the roster is published under (see the module docstring). The
+#: self-tests point it at a scratch key of their own.
+_KEY = tmstore.roster_key()
+_SHARED = tmstore.Snapshot(_KEY)
 
 
 #: Have we seeded memory from the file yet? See `_adopt`.
@@ -315,7 +319,8 @@ _ADOPTED = [False]
 
 
 def _adopt():
-    """Seed the in-memory maps from the file BEFORE this process starts writing it.
+    """Seed the in-memory maps from the published snapshot BEFORE this process
+    starts writing it.
 
     WARNING: THIS IS A RESTART WIPE, AND IT DESTROYED A LIVE RESERVATION IN FRONT OF
     THE OWNING PROCESS. `_publish` sets `_OWNER[0] = True` and from that moment every
@@ -348,7 +353,7 @@ def _adopt():
     if _ADOPTED[0]:
         return
     _ADOPTED[0] = True
-    disk = _read_file() or {}
+    disk = _read_shared() or {}
     for mem, key in ((_RECORDS, "records"), (_ROOMS_SEQ, "seq"),
                      (_GUIDS, "guids"), (_DELTAS, "deltas"),
                      (_NAMES, "names"), (_TABLES, "tables"),
@@ -362,73 +367,72 @@ def _adopt():
 def _publish():
     """Hand the roster to the other container. Never raises -- a snapshot must
     not be able to break a room entry."""
-    # NEVER take ownership of a file we have not read. See `_adopt`.
+    # NEVER take ownership of a snapshot we have not read. See `_adopt`.
     if not _ADOPTED[0]:
         _adopt()
     _OWNER[0] = True
     try:
-        os.makedirs(os.path.dirname(_FILE), exist_ok=True)
-        tmp = _FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump({"records": _RECORDS, "seq": _ROOMS_SEQ,
-                       "guids": _GUIDS, "deltas": _DELTAS,
-                       "names": _NAMES, "tables": _TABLES,
-                       "peers": _PEERS, "polids": _POLIDS,
-                       "seats": _SEATS, "rules": _RULES,
-                       "confirmed": _CONFIRMED}, f)
-        os.replace(tmp, _FILE)                  # atomic
-        _CACHE["mtime"] = -1.0
-    except OSError:
-        pass
+        with _LOCK:
+            doc = json.loads(json.dumps(
+                {"records": _RECORDS, "seq": _ROOMS_SEQ,
+                 "guids": _GUIDS, "deltas": _DELTAS,
+                 "names": _NAMES, "tables": _TABLES,
+                 "peers": _PEERS, "polids": _POLIDS,
+                 "seats": _SEATS, "rules": _RULES,
+                 "confirmed": _CONFIRMED}))
+        _SHARED.key = _KEY
+        _SHARED.write(doc)                      # one SET: readers see all or nothing
+    except Exception as exc:                    # noqa: BLE001 -- Valkey away
+        tmstore._whine("publishing the roster", exc)
 
 
 def _live_records():
     if _OWNER[0]:
         with _LOCK:
             return json.loads(json.dumps(_RECORDS))
-    return (_read_file() or {}).get("records", {})
+    return (_read_shared() or {}).get("records", {})
 
 
 def _live_seq():
     if _OWNER[0]:
         with _LOCK:
             return dict(_ROOMS_SEQ)
-    return (_read_file() or {}).get("seq", {})
+    return (_read_shared() or {}).get("seq", {})
 
 
 def _live_guids():
     if _OWNER[0]:
         with _LOCK:
             return dict(_GUIDS)
-    return (_read_file() or {}).get("guids", {})
+    return (_read_shared() or {}).get("guids", {})
 
 
 def _live_deltas():
     if _OWNER[0]:
         with _LOCK:
             return json.loads(json.dumps(_DELTAS))
-    return (_read_file() or {}).get("deltas", {})
+    return (_read_shared() or {}).get("deltas", {})
 
 
 def _live_peers():
     if _OWNER[0]:
         with _LOCK:
             return dict(_PEERS)
-    return (_read_file() or {}).get("peers", {})
+    return (_read_shared() or {}).get("peers", {})
 
 
 def _live_tables():
     if _OWNER[0]:
         with _LOCK:
             return json.loads(json.dumps(_TABLES))
-    return (_read_file() or {}).get("tables", {})
+    return (_read_shared() or {}).get("tables", {})
 
 
 def _live_rules():
     if _OWNER[0]:
         with _LOCK:
             return json.loads(json.dumps(_RULES))
-    return (_read_file() or {}).get("rules", {})
+    return (_read_shared() or {}).get("rules", {})
 
 
 def note_table_rules(chan, index, fields):
@@ -497,14 +501,14 @@ def _live_names():
     if _OWNER[0]:
         with _LOCK:
             return dict(_NAMES)
-    return (_read_file() or {}).get("names", {})
+    return (_read_shared() or {}).get("names", {})
 
 
 def _live_pol_ids():
     if _OWNER[0]:
         with _LOCK:
             return dict(_POLIDS)
-    return (_read_file() or {}).get("polids", {})
+    return (_read_shared() or {}).get("polids", {})
 
 
 def note_name(member_id, name):
@@ -602,7 +606,7 @@ def _seed_pol_ids():
         return
     _POLIDS_SEEDED[0] = True
     try:
-        published = (_read_file() or {}).get("polids") or {}
+        published = (_read_shared() or {}).get("polids") or {}
     except Exception:
         return
     with _LOCK:
@@ -680,19 +684,10 @@ def pol_id_of(member_id):
     return str((_live_pol_ids() or {}).get(str(mid), ""))
 
 
-def _read_file():
-    try:
-        mtime = os.stat(_FILE).st_mtime
-    except OSError:
-        return {}
-    if mtime != _CACHE["mtime"]:
-        try:
-            with open(_FILE, "r", encoding="utf-8") as f:
-                _CACHE["data"] = json.load(f) or {}
-            _CACHE["mtime"] = mtime
-        except (OSError, ValueError):
-            return _CACHE["data"]               # torn write: last good view stands
-    return _CACHE["data"]
+def _read_shared():
+    """The published roster, re-read only when the writer has moved it on."""
+    _SHARED.key = _KEY
+    return _SHARED.read()
 
 
 #: How many deltas we keep per room. `cp__002fae98` full-reloads a client more
@@ -1258,7 +1253,7 @@ def _live_confirmed():
     if _OWNER[0]:
         with _LOCK:
             return {k: list(v) for k, v in _CONFIRMED.items()}
-    return (_read_file() or {}).get("confirmed", {})
+    return (_read_shared() or {}).get("confirmed", {})
 
 
 def seats(chan):
@@ -1277,7 +1272,7 @@ def _live_seats():
     if _OWNER[0]:
         with _LOCK:
             return json.loads(json.dumps(_SEATS))
-    return (_read_file() or {}).get("seats", {})
+    return (_read_shared() or {}).get("seats", {})
 
 
 def tables(chan):
@@ -2216,12 +2211,12 @@ def selftest():
     member records gone and the room sequence reset to 2. Measured on prod
     2026-08-20T00:49Z, by me, doing exactly that to "check the deploy". The
     hazard was always there in the member half; the table half only made it
-    bigger. `_FILE` is redirected to a scratch path for the duration and the
+    bigger. `_KEY` is redirected to a scratch key for the duration and the
     module state is restored on the way out, so a selftest can no longer reach
     the snapshot two containers share.
     """
     ok = True
-    _saved = (_FILE, _OWNER[0], dict(_RECORDS), dict(_ROOMS_SEQ), dict(_GUIDS),
+    _saved = (_KEY, _OWNER[0], dict(_RECORDS), dict(_ROOMS_SEQ), dict(_GUIDS),
               dict(_NAMES), json.loads(json.dumps(_DELTAS)),
               json.loads(json.dumps(_TABLES)), dict(_PEERS),
               json.loads(json.dumps(_RULES)),
@@ -2233,7 +2228,7 @@ def selftest():
     try:
         return _selftest_body()
     finally:
-        globals()["_FILE"] = _saved[0]
+        globals()["_KEY"] = _saved[0]
         _OWNER[0] = _saved[1]
         for d, v in ((_RECORDS, _saved[2]), (_ROOMS_SEQ, _saved[3]),
                      (_GUIDS, _saved[4]), (_NAMES, _saved[5]),
@@ -2242,15 +2237,14 @@ def selftest():
                      (_SEATS, _saved[10]), (_CONFIRMED, _saved[11]),
                      (_POLIDS, _saved[12])):
             d.clear(); d.update(v)
-        _CACHE["mtime"] = -1.0
+        _SHARED.forget()
 
 
 def _selftest_body():
     """The assertions themselves. Called only through `selftest`, which is what
-    guarantees the scratch `_FILE` and the state restore above."""
-    import tempfile
-    globals()["_FILE"] = os.path.join(tempfile.mkdtemp(prefix="tmroom-selftest-"),
-                                      "tm-roster.json")
+    guarantees the scratch `_KEY` and the state restore above."""
+    import uuid
+    globals()["_KEY"] = "tm:selftest:%s:roster" % uuid.uuid4().hex
     ok = True
 
     # member[0] of a real served b/g/PTL, tmptl-authored: a test member in room 1.

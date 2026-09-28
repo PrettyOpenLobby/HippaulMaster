@@ -10,6 +10,7 @@ seating selftests do it. The member ids and their 64-bit app ids are made up
 here; the app ids sit in the client key's coset the way a real `@Init=/NN=`
 value does.
 """
+import uuid
 import os
 import re
 import sys
@@ -55,13 +56,13 @@ MEMBERS = [(0x1001 + i, tmroom.app_id_for_guid(0x00E100000100 + i))
 
 
 def reset():
-    tmroom._FILE = os.path.join(tempfile.mkdtemp(dir=tmp), "r.json")
+    tmroom._KEY = "tm:selftest:tm-test:" + uuid.uuid4().hex
     tmroom._OWNER[0] = True
     for d in (tmroom._TABLES, tmroom._PEERS, tmroom._RECORDS,
               tmroom._ROOMS_SEQ, tmroom._SEATS, tm._SEATED):
         d.clear()
     tm._SEATED_ADOPTED.clear()
-    tmroom._CACHE["mtime"] = -1.0
+    tmroom._SHARED.forget()
     for mid, _ident in MEMBERS:
         tmroom.note_member(mid, ["0", "0", "0", "0", "T", "2", "0", "0", "0",
                                  "0x0000002000000001", "T"])

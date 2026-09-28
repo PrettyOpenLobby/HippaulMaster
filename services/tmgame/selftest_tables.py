@@ -1,5 +1,6 @@
 """Selftests: packs, seating, the heartbeat, the table audit and reconcile, @GameML, peers and chat.
 """
+import uuid
 import json
 import tm_cardprm
 import time
@@ -168,12 +169,12 @@ def _selftest_seating():
     """
     import os as _os, tempfile, tmroom
     ok = True
-    saved = (tmroom._FILE, tmroom._OWNER[0],
+    saved = (tmroom._KEY, tmroom._OWNER[0],
              dict(tmroom._TABLES), dict(tmroom._PEERS),
              dict(tmroom._RECORDS), dict(tmroom._ROOMS_SEQ))
     saved_seated = dict(seating._SEATED)
     try:
-        tmroom._FILE = _os.path.join(tempfile.mkdtemp(prefix="tm-seat-"), "r.json")
+        tmroom._KEY = "tm:selftest:tm-seat:" + uuid.uuid4().hex
         tmroom._OWNER[0] = True
         tmroom._TABLES.clear(); tmroom._PEERS.clear()
         tmroom._RECORDS.clear(); tmroom._ROOMS_SEQ.clear(); seating._SEATED.clear()
@@ -217,12 +218,12 @@ def _selftest_seating():
     except Exception as exc:
         common._say("FAIL: seating selftest raised %r" % (exc,)); ok = False
     finally:
-        (tmroom._FILE, tmroom._OWNER[0]) = saved[0], saved[1]
+        (tmroom._KEY, tmroom._OWNER[0]) = saved[0], saved[1]
         for d, v in ((tmroom._TABLES, saved[2]), (tmroom._PEERS, saved[3]),
                      (tmroom._RECORDS, saved[4]), (tmroom._ROOMS_SEQ, saved[5]),
                      (seating._SEATED, saved_seated)):
             d.clear(); d.update(v)
-        tmroom._CACHE["mtime"] = -1.0
+        tmroom._SHARED.forget()
     return ok
 
 
@@ -242,13 +243,12 @@ def _selftest_cancel():
     """
     import os as _os, tempfile, tmroom
     ok = True
-    saved = (tmroom._FILE, tmroom._OWNER[0],
+    saved = (tmroom._KEY, tmroom._OWNER[0],
              dict(tmroom._TABLES), dict(tmroom._PEERS),
              dict(tmroom._RECORDS), dict(tmroom._ROOMS_SEQ))
     saved_seated = dict(seating._SEATED)
     try:
-        tmroom._FILE = _os.path.join(tempfile.mkdtemp(prefix="tm-cancel-"),
-                                     "r.json")
+        tmroom._KEY = "tm:selftest:tm-cancel:" + uuid.uuid4().hex
         tmroom._OWNER[0] = True
         tmroom._TABLES.clear(); tmroom._PEERS.clear()
         tmroom._RECORDS.clear(); tmroom._ROOMS_SEQ.clear(); seating._SEATED.clear()
@@ -285,12 +285,12 @@ def _selftest_cancel():
     except Exception as exc:
         common._say("FAIL: cancel selftest raised %r" % (exc,)); ok = False
     finally:
-        (tmroom._FILE, tmroom._OWNER[0]) = saved[0], saved[1]
+        (tmroom._KEY, tmroom._OWNER[0]) = saved[0], saved[1]
         for d, v in ((tmroom._TABLES, saved[2]), (tmroom._PEERS, saved[3]),
                      (tmroom._RECORDS, saved[4]), (tmroom._ROOMS_SEQ, saved[5]),
                      (seating._SEATED, saved_seated)):
             d.clear(); d.update(v)
-        tmroom._CACHE["mtime"] = -1.0
+        tmroom._SHARED.forget()
     return ok
 
 
@@ -307,7 +307,7 @@ def _selftest_heartbeat():
     """
     import os as _os, tempfile, tmroom
     ok = True
-    saved = (tmroom._FILE, tmroom._OWNER[0],
+    saved = (tmroom._KEY, tmroom._OWNER[0],
              dict(tmroom._TABLES), dict(tmroom._PEERS),
              dict(tmroom._RECORDS), dict(tmroom._ROOMS_SEQ))
     saved_seated = dict(seating._SEATED)
@@ -316,7 +316,7 @@ def _selftest_heartbeat():
     saved_sweep, saved_ttl = matchmaking._SEAT_SWEEP[0], _os.environ.get("POL_TM_SEAT_TTL_S")
     chan = "#TM0R001"
     try:
-        tmroom._FILE = _os.path.join(tempfile.mkdtemp(prefix="tm-hb-"), "r.json")
+        tmroom._KEY = "tm:selftest:tm-hb:" + uuid.uuid4().hex
         tmroom._OWNER[0] = True
         for d in (tmroom._TABLES, tmroom._PEERS, tmroom._RECORDS,
                   tmroom._ROOMS_SEQ, seating._SEATED, matchmaking._SEAT_ALIVE, matchmaking._MATCH_BEGAN,
@@ -405,7 +405,7 @@ def _selftest_heartbeat():
     except Exception as exc:
         common._say("FAIL: heartbeat selftest raised %r" % (exc,)); ok = False
     finally:
-        (tmroom._FILE, tmroom._OWNER[0]) = saved[0], saved[1]
+        (tmroom._KEY, tmroom._OWNER[0]) = saved[0], saved[1]
         for d, v in ((tmroom._TABLES, saved[2]), (tmroom._PEERS, saved[3]),
                      (tmroom._RECORDS, saved[4]), (tmroom._ROOMS_SEQ, saved[5]),
                      (seating._SEATED, saved_seated), (matchmaking._SEAT_ALIVE, saved_alive),
@@ -416,7 +416,7 @@ def _selftest_heartbeat():
             _os.environ.pop("POL_TM_SEAT_TTL_S", None)
         else:
             _os.environ["POL_TM_SEAT_TTL_S"] = saved_ttl
-        tmroom._CACHE["mtime"] = -1.0
+        tmroom._SHARED.forget()
     return ok
 
 
@@ -431,12 +431,12 @@ def _selftest_seat_move():
     """
     import os as _os, tempfile, tmroom
     ok = True
-    saved = (tmroom._FILE, tmroom._OWNER[0], dict(tmroom._TABLES),
+    saved = (tmroom._KEY, tmroom._OWNER[0], dict(tmroom._TABLES),
              dict(tmroom._PEERS), dict(tmroom._RECORDS), dict(tmroom._ROOMS_SEQ),
              dict(tmroom._SEATS))
     saved_seated = dict(seating._SEATED)
     try:
-        tmroom._FILE = _os.path.join(tempfile.mkdtemp(prefix="tm-move-"), "r.json")
+        tmroom._KEY = "tm:selftest:tm-move:" + uuid.uuid4().hex
         tmroom._OWNER[0] = True
         for d in (tmroom._TABLES, tmroom._PEERS, tmroom._RECORDS,
                   tmroom._ROOMS_SEQ, tmroom._SEATS):
@@ -467,12 +467,12 @@ def _selftest_seat_move():
     except Exception as exc:
         common._say("FAIL: seat-move selftest raised %r" % (exc,)); ok = False
     finally:
-        (tmroom._FILE, tmroom._OWNER[0]) = saved[0], saved[1]
+        (tmroom._KEY, tmroom._OWNER[0]) = saved[0], saved[1]
         for d, v in ((tmroom._TABLES, saved[2]), (tmroom._PEERS, saved[3]),
                      (tmroom._RECORDS, saved[4]), (tmroom._ROOMS_SEQ, saved[5]),
                      (tmroom._SEATS, saved[6]), (seating._SEATED, saved_seated)):
             d.clear(); d.update(v)
-        tmroom._CACHE["mtime"] = -1.0
+        tmroom._SHARED.forget()
     return ok
 
 
@@ -491,15 +491,14 @@ def _selftest_audit():
     """
     import os as _os, tempfile, tmroom
     ok = True
-    saved = (tmroom._FILE, tmroom._OWNER[0],
+    saved = (tmroom._KEY, tmroom._OWNER[0],
              dict(tmroom._TABLES), dict(tmroom._PEERS),
              dict(tmroom._RECORDS), dict(tmroom._ROOMS_SEQ),
              json.loads(json.dumps(tmroom._SEATS)),
              json.loads(json.dumps(tmroom._CONFIRMED)))
     saved_seated = dict(seating._SEATED)
     try:
-        tmroom._FILE = _os.path.join(tempfile.mkdtemp(prefix="tm-audit-"),
-                                     "r.json")
+        tmroom._KEY = "tm:selftest:tm-audit:" + uuid.uuid4().hex
         tmroom._OWNER[0] = True
         tmroom._TABLES.clear(); tmroom._PEERS.clear()
         tmroom._RECORDS.clear(); tmroom._ROOMS_SEQ.clear()
@@ -536,13 +535,13 @@ def _selftest_audit():
     except Exception as exc:
         common._say("FAIL: audit selftest raised %r" % (exc,)); ok = False
     finally:
-        (tmroom._FILE, tmroom._OWNER[0]) = saved[0], saved[1]
+        (tmroom._KEY, tmroom._OWNER[0]) = saved[0], saved[1]
         for d, v in ((tmroom._TABLES, saved[2]), (tmroom._PEERS, saved[3]),
                      (tmroom._RECORDS, saved[4]), (tmroom._ROOMS_SEQ, saved[5]),
                      (tmroom._SEATS, saved[6]), (tmroom._CONFIRMED, saved[7]),
                      (seating._SEATED, saved_seated)):
             d.clear(); d.update(v)
-        tmroom._CACHE["mtime"] = -1.0
+        tmroom._SHARED.forget()
     return ok
 
 
@@ -556,15 +555,14 @@ def _selftest_reconcile():
     """
     import os as _os, tempfile, tmroom
     ok = True
-    saved = (tmroom._FILE, tmroom._OWNER[0],
+    saved = (tmroom._KEY, tmroom._OWNER[0],
              dict(tmroom._TABLES), dict(tmroom._PEERS),
              dict(tmroom._RECORDS), dict(tmroom._ROOMS_SEQ),
              json.loads(json.dumps(tmroom._SEATS)),
              json.loads(json.dumps(tmroom._CONFIRMED)))
     saved_seated = dict(seating._SEATED)
     try:
-        tmroom._FILE = _os.path.join(tempfile.mkdtemp(prefix="tm-recon-"),
-                                     "r.json")
+        tmroom._KEY = "tm:selftest:tm-recon:" + uuid.uuid4().hex
         tmroom._OWNER[0] = True
         tmroom._TABLES.clear(); tmroom._PEERS.clear()
         tmroom._RECORDS.clear(); tmroom._ROOMS_SEQ.clear()
@@ -672,13 +670,13 @@ def _selftest_reconcile():
     except Exception as exc:
         common._say("FAIL: reconcile selftest raised %r" % (exc,)); ok = False
     finally:
-        (tmroom._FILE, tmroom._OWNER[0]) = saved[0], saved[1]
+        (tmroom._KEY, tmroom._OWNER[0]) = saved[0], saved[1]
         for d, v in ((tmroom._TABLES, saved[2]), (tmroom._PEERS, saved[3]),
                      (tmroom._RECORDS, saved[4]), (tmroom._ROOMS_SEQ, saved[5]),
                      (tmroom._SEATS, saved[6]), (tmroom._CONFIRMED, saved[7]),
                      (seating._SEATED, saved_seated)):
             d.clear(); d.update(v)
-        tmroom._CACHE["mtime"] = -1.0
+        tmroom._SHARED.forget()
     return ok
 
 
@@ -772,7 +770,7 @@ def _selftest_gameml_format():
         for k, v in saved.items():
             getattr(tmroom, k).clear(); getattr(tmroom, k).update(v)
         tmroom._OWNER[0] = saved_owner
-        tmroom._CACHE["mtime"] = -1.0
+        tmroom._SHARED.forget()
     return ok
 
 
@@ -816,13 +814,12 @@ def _selftest_value0():
     <PC> removal still rewrites after the record is popped."""
     import os as _os, tempfile, tmroom
     ok = True
-    saved = (tmroom._FILE, tmroom._OWNER[0], dict(tmroom._RECORDS),
+    saved = (tmroom._KEY, tmroom._OWNER[0], dict(tmroom._RECORDS),
              dict(tmroom._ROOMS_SEQ), dict(tmroom._GUIDS),
              dict(tmroom._POLIDS),
              json.loads(json.dumps(tmroom._DELTAS)))
     try:
-        tmroom._FILE = _os.path.join(tempfile.mkdtemp(prefix="tm-v0-"),
-                                     "r.json")
+        tmroom._KEY = "tm:selftest:tm-v0:" + uuid.uuid4().hex
         tmroom._OWNER[0] = True
         tmroom._RECORDS.clear(); tmroom._ROOMS_SEQ.clear()
         tmroom._GUIDS.clear(); tmroom._POLIDS.clear(); tmroom._DELTAS.clear()
@@ -856,12 +853,12 @@ def _selftest_value0():
     except Exception as exc:
         common._say("FAIL: value0 selftest raised %r" % (exc,)); ok = False
     finally:
-        (tmroom._FILE, tmroom._OWNER[0]) = saved[0], saved[1]
+        (tmroom._KEY, tmroom._OWNER[0]) = saved[0], saved[1]
         for d, v in ((tmroom._RECORDS, saved[2]), (tmroom._ROOMS_SEQ, saved[3]),
                      (tmroom._GUIDS, saved[4]), (tmroom._POLIDS, saved[5]),
                      (tmroom._DELTAS, saved[6])):
             d.clear(); d.update(v)
-        tmroom._CACHE["mtime"] = -1.0
+        tmroom._SHARED.forget()
     return ok
 
 
@@ -920,7 +917,7 @@ def _selftest_chat():
     """
     import os as _os, tempfile, tmroom
     ok = True
-    saved = (tmroom._FILE, tmroom._OWNER[0])
+    saved = (tmroom._KEY, tmroom._OWNER[0])
     saved_maps = [(d, dict(d)) for d in (tmroom._RECORDS, tmroom._ROOMS_SEQ,
                                          tmroom._POLIDS, tmroom._NAMES,
                                          tmroom._GUIDS, roomchat._CHAT_SERIAL)]
@@ -943,7 +940,7 @@ def _selftest_chat():
     roomchat._CHAT_CONTROL_FILE = _os.path.join(tempfile.mkdtemp(prefix="tm-toggle-"),
                                        "tm_chat_roster.txt")
     try:
-        tmroom._FILE = _os.path.join(tempfile.mkdtemp(prefix="tm-chat-"), "r.json")
+        tmroom._KEY = "tm:selftest:tm-chat:" + uuid.uuid4().hex
         tmroom._OWNER[0] = True
         for d, _ in saved_maps:
             d.clear()
@@ -1074,7 +1071,7 @@ def _selftest_chat():
             ok = False
         _os.environ["POL_TM_CHAT_ROSTER"] = "1"    # restore for any later check
     finally:
-        tmroom._FILE, tmroom._OWNER[0] = saved
+        tmroom._KEY, tmroom._OWNER[0] = saved
         for d, was in saved_maps:
             d.clear()
             d.update(was)

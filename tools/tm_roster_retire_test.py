@@ -33,7 +33,7 @@ TMP = tempfile.mkdtemp(prefix="roster-retire-")
 os.environ["POL_ACCOUNTS_DB"] = os.path.join(TMP, "accounts.db")
 os.environ["POL_DATA_DIR"] = TMP
 os.environ["POL_LOG_DIR"] = TMP
-os.environ["POL_TM_ROSTER_FILE"] = os.path.join(TMP, "tm-roster.json")
+os.environ["POL_TM_ROSTER_KEY"] = "tm:test:%s:roster" % os.path.basename(TMP)
 
 import responders as C                                             # noqa: E402
 import tmtitle as R                                                # noqa: E402
@@ -155,21 +155,21 @@ tmroom.note_pol_id(6, "AB12CD56EB0F5932")
 tmroom.note_pol_id(9, "AB12CD1EEEAE9C3B")
 check(tmroom.pol_id_of(9) == "AB12CD1EEEAE9C3B", "both POL-IDs stored")
 
-# the bounce: memory gone, the published file still on disk
+# the bounce: memory gone, the published snapshot still in the store
 tmroom._POLIDS.clear()
 tmroom._POLIDS_SEEDED[0] = False
 tmroom._OWNER[0] = False
-tmroom._CACHE["mtime"] = -1.0
+tmroom._SHARED.forget()
 
 check(tmroom.pol_id_of(9) == "AB12CD1EEEAE9C3B",
-      "a POL-ID survives a restart", "recovered from the published file")
+      "a POL-ID survives a restart", "recovered from the published snapshot")
 
-# ...and a live capture must beat the file, never the other way round
+# ...and a live capture must beat the snapshot, never the other way round
 tmroom._POLIDS.clear()
 tmroom._POLIDS_SEEDED[0] = False
 tmroom.note_pol_id(9, "AAAABBBBCCCCDDDD")     # this process just learned better
 check(tmroom.pol_id_of(9) == "AAAABBBBCCCCDDDD",
-      "a live capture wins over the published file")
+      "a live capture wins over the published snapshot")
 
 print()
 print("roster-retire: " + ("OK" if not FAILS else f"FAILED ({len(FAILS)})"))

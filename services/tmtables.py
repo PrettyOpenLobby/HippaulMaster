@@ -20,7 +20,8 @@ summary line -- never silence. Exit codes: 0 clean, 1 violations found,
 WARNING: Standalone limits (this is a fresh process, not the serving band): live
 sessions are invisible, so presence-dependent checks degrade to `info` --
 see `audit_room_tables`' docstring. The seat list and rows are the SHARED
-file's view (`tm-roster.json`), which is exactly what both containers serve
+roster's view (tmroom's published snapshot, Valkey `tm:roster`; run this with
+the stack's POL_VALKEY_URL), which is exactly what both containers serve
 from; what a band's in-process `_SEATED` privately believes is only auditable
 from inside that band.
 """

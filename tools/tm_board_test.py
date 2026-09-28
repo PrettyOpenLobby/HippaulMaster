@@ -136,7 +136,8 @@ def setup(tmp):
     os.makedirs(res)
     os.environ["POL_RESOURCE_DIR"] = res
     os.environ["POL_DATA_DIR"] = tmp
-    os.environ["POL_TM_ROSTER_FILE"] = os.path.join(tmp, "tm-roster.json")
+    os.environ["POL_TM_ROSTER_KEY"] = "tm:test:%s:roster" % os.path.basename(tmp)
+    os.environ["POL_TM_WATCH_KEY"] = "tm:test:%s:tables-live" % os.path.basename(tmp)
     db = os.path.join(tmp, "accounts.db")
     os.environ["POL_ACCOUNTS_DB"] = db
     c = sqlite3.connect(db)
@@ -187,9 +188,10 @@ def setup(tmp):
                         "week_of": week, "week_games": 1})):
         with open(os.path.join(res, "%d%s" % (m, tmrank.COLLECTION_SUFFIX)), "w") as fh:
             json.dump({"cards": [], "money": 100, "rank": blk}, fh)
-    with open(os.environ["POL_TM_ROSTER_FILE"], "w") as fh:
-        json.dump({"names": {"1": "Fox", "2": "Perry", "4": "Star*Man", "5": "Idle",
-                             "6": "OneGame"}}, fh)
+    import tmstore
+    tmstore.Snapshot(tmstore.roster_key()).write(
+        {"names": {"1": "Fox", "2": "Perry", "4": "Star*Man", "5": "Idle",
+                   "6": "OneGame"}})
     # the auction: two sellers' stores
     exhibit = lambda m: os.path.join(res, "%d.U_g_TM0_EXHIBITLIST.bin" % m)   # noqa: E731
     with open(exhibit(1), "wb") as fh:
@@ -656,8 +658,8 @@ def bot_checks(tmp, boardtm, polboards, snap, args):
 
 
 def watch_checks(tmp, boardtm, polboards, args):
-    print("watching -- the live matches file")
-    path = os.path.join(tmp, "tm-tables-live.json")
+    print("watching -- the live matches document")
+    import tmstore
     state = {"id": "1-3", "room": 1, "table": 3, "n": 2, "tiles": 16, "com": False,
              "phase": "play", "turn": 3, "active": 1, "limit": 10,
              "players": [{"name": "Fox", "com": False, "hand": 3, "score": 2},
@@ -665,8 +667,9 @@ def watch_checks(tmp, boardtm, polboards, args):
              "board": {}, "objects": [], "steps": [], "winner": None, "began": 1.0}
 
     def write(tables, stamp=None):
-        with open(path, "w") as fh:
-            json.dump({"stamp": time.time() if stamp is None else stamp, "tables": tables}, fh)
+        tmstore.kv.set_json(tmstore.watch_key(),
+                            {"stamp": time.time() if stamp is None else stamp,
+                             "tables": tables})
         boardtm._TABLES.update(t=0.0, d={})
     write({"1-3": {"watchable": True, "state": state}, "1-4": {"watchable": False}})
     t = boardtm.live_tables()
@@ -678,7 +681,7 @@ def watch_checks(tmp, boardtm, polboards, args):
                   "names": ["Fox", "Cor*vin"], "scores": [2, 1], "turn": 3, "limit": 10,
                   "n": 2}], sm)
     write({"1-3": {"watchable": True, "state": state}}, stamp=time.time() - 120)
-    check("a stale file (the writer is gone) shows nothing", boardtm.live_tables() == {})
+    check("a stale document (the writer is gone) shows nothing", boardtm.live_tables() == {})
     write({"1-3": {"watchable": True, "state": state}})
     ok, st = boardtm.route("/watch.json", {"t": ["1-3"]}, args)[:2]
     check("/watch.json?t= serves that match", ok == 200 and json.loads(st)["state"]["id"] == "1-3")

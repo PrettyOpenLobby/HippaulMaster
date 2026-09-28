@@ -42,7 +42,7 @@ TMP = tempfile.mkdtemp(prefix="lobby-counts-")
 os.environ["POL_ACCOUNTS_DB"] = os.path.join(TMP, "accounts.db")
 os.environ["POL_DATA_DIR"] = TMP
 os.environ["POL_LOG_DIR"] = TMP
-os.environ["POL_TM_ROSTER_FILE"] = os.path.join(TMP, "tm-roster.json")
+os.environ["POL_TM_ROSTER_KEY"] = "tm:test:%s:roster" % os.path.basename(TMP)
 
 import responders                                                  # noqa: E402  binds the core into the title
 import tmtitle as R                                                # noqa: E402
