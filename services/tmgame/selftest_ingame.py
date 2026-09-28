@@ -2952,12 +2952,12 @@ def _selftest_ingame():
         # so a match in card select reported 0 live matches and pol-git-sync /
         # pol-stale-check recreated login+authsess straight through it. That is
         # the restart above.
-        _lmp = os.path.join(os.environ.get("POL_DATA_DIR", "/data"),
-                            "tm-matches-live.json")
+        import live_sessions
+        _lmp = webwatch.LIVE_SERVICE
         matchstart._CARD_READY.clear(); boardrules._MATCH_TURN.clear(); matchmaking._MATCH_STARTED.clear()
         webwatch._live_matches_write()
         try:
-            if json.load(open(_lmp)).get("count") != 0:
+            if live_sessions.read_marker(_lmp).get("count") != 0:
                 common._say("FAIL: with no match anywhere the live marker must "
                      "report 0"); ok = False
         except Exception as _e:
@@ -2966,7 +2966,7 @@ def _selftest_ingame():
         matchmaking._MATCH_STARTED[("#TM0RTEST", 4)] = True
         webwatch._live_matches_write()
         try:
-            if json.load(open(_lmp)).get("count") != 1:
+            if live_sessions.read_marker(_lmp).get("count") != 1:
                 common._say("FAIL: a match that has STARTED but not yet DEALT must "
                      "count as live -- this is the card-select blind spot that "
                      "let a deploy restart eat a match on 2026-08-25"); ok = False
