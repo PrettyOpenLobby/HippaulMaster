@@ -62,7 +62,7 @@ def migrations(tmstore):
     print("migrations")
     from polcore import db
     applied = tmstore.db.migrate(directory=tmstore.MIGRATIONS_DIR, log=lambda m: None)
-    check("CrystalMaster's set applies on an empty database", applied == ["3001_tm_state"],
+    check("HippaulMaster's set applies on an empty database", applied == ["3001_tm_state"],
           applied)
     tables = {r["table_name"] for r in db.query(
         "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")}

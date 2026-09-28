@@ -1,6 +1,6 @@
-# Contributing to CrystalMaster
+# Contributing to HippaulMaster
 
-CrystalMaster is the Tetra Master title for the OpenLobby core. It runs inside
+HippaulMaster is the Tetra Master title for the OpenLobby core. It runs inside
 the core's `login` and `authsess` processes as a plugin, so most of what a
 client does in Tetra Master arrives here as one line of the game channel and
 leaves as the line that answers it. This page says where things are, how to
@@ -34,7 +34,7 @@ services/
   tmtables.py       the table-truth report
   tmstore.py        reaches the core's polcore: the durable tables and the
                     live keys (tm:*); migrate and status
-  tm_migrations/    CrystalMaster's migrations, numbered from 3001
+  tm_migrations/    HippaulMaster's migrations, numbered from 3001
   tmblob.py         collections, saves, prizes, auction records and rank
                     lists as rows of the core's blob table
   boardtm.py        the optional live board (rankings, auction, matches)
@@ -175,7 +175,7 @@ record, the auction's records and the rank lists are rows of the core's
 file names. A read-modify-write goes through `tmblob.locked(name)`, one
 transaction holding a lock named after the record, so two containers
 updating the same record take turns. The tournament standings, the weekly
-champion and the board's Discord bookkeeping are CrystalMaster's own tables
+champion and the board's Discord bookkeeping are HippaulMaster's own tables
 (`tm_*`), through `tmstore.py`. Live state that several containers read
 (the room roster, the matches being watched, an accept quorum) goes in
 Valkey through the core's `polcore.kv` under `tm:` keys. Nothing durable
@@ -190,7 +190,7 @@ A selftest that needs an empty store wraps its work in
 A schema change is a new file in `services/tm_migrations/` with the next
 number. A shipped migration is never edited. The core's `schema_migrations`
 table is keyed by the number alone and shared with the core and the other
-titles, so CrystalMaster keeps to 3001-3999 and a table name that starts
+titles, so HippaulMaster keeps to 3001-3999 and a table name that starts
 with `tm_`; a reused number is silently skipped.
 
 Moving a file into the database comes with an importer in `tmstore.py`
