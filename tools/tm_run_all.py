@@ -62,6 +62,7 @@ SUITES = [
     ("tm_board",      [PY, "tm_board_test.py"],                HERE,     False),
     ("tm_faces",      [PY, "tm_faces_test.py"],                HERE,     False),
     ("tm_com_deck",   [PY, "tm_com_deck_test.py"],             HERE,     False),
+    ("tm_deck_slot_growth", [PY, "tm_deck_slot_growth_test.py"], HERE, False),
     ("tm_event_release", [PY, "tm_event_release_test.py"],     HERE,     False),
     ("tm_gameea_refuse", [PY, "tm_gameea_refuse_test.py"],     HERE,     False),
     # --- the seam with the core: the roster, the counts, the save defaults --
