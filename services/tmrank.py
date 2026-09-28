@@ -121,6 +121,8 @@ import re
 import struct
 import time
 
+import tmblob
+
 REC = 232                       #: bytes per rank row
 MAX_ROWS = 100                  #: 0x8AF00's ceiling, and the display table's
 
@@ -457,46 +459,44 @@ def week_games_of(blk, now=None):
 # by the SESSION'S MEMBER, and a ranking list is the one thing on this server
 # that is the same for everybody -- one copy per account is how `b/g/ZL` forked
 # into four divergent versions across 17 accounts. So the generator writes ONE
-# file per list under `<resources>/tmrank/`, which both containers see because
-# `/data` is bind-mounted into all of them, and `responders._rank_list_blob`
-# reads it there before it falls back to the shipped fixture.
+# record per list in the `tmrank` scope of the core's blob table (tmblob.py:
+# `tmrank.<path with _>.bin`; it was the directory `<resources>/tmrank/`), which
+# every container sees, and the title's resource template hook reads it there
+# before it falls back to the shipped fixture.
 #
 # GENERATION IS A JOB, NOT A REQUEST HANDLER. The `<LN>` row count is answered
 # by one container and the bytes are served by another, seconds later; a rebuild
 # BETWEEN those two is a length mismatch, which is POL-5135's shape. SE rebuilt
 # these weekly ("Next update: 01/02/2011 10:00 PST") and so do we -- run
 # `tools/tmrank.py`, do not generate inline.
-def store_dir():
-    root = os.environ.get("POL_RESOURCE_DIR")
-    if not root:
-        root = os.path.join(os.environ.get("POL_DATA_DIR", "/data"), "resources")
-    return os.path.join(root, "tmrank")
+#: The blob scope the published lists and the observed pools are kept in.
+STORE_SCOPE = "tmrank"
 
 
 def store_file(path):
-    return os.path.join(store_dir(), path.replace("/", "_") + ".bin")
+    """The record name (tmblob.py) of the published list for a resource path."""
+    return "%s.%s.bin" % (STORE_SCOPE, path.replace("/", "_"))
 
 
 def stored(path):
     """The generated blob for a ranking path, or None."""
     try:
-        with open(store_file(path), "rb") as f:
-            return f.read()
-    except OSError:
+        return tmblob.read(store_file(path))
+    except tmblob.errors():
         return None
 
 
 def write_store(files):
-    """{resource path: bytes} -> written filenames. Atomic per file."""
-    os.makedirs(store_dir(), exist_ok=True)
+    """{resource path: bytes} -> the record names written. All of them in ONE
+    transaction: a reader sees last week's set or this week's, never a mix,
+    so a `<LN>` row count and the bytes served after it cannot come from two
+    different publishes."""
     done = []
-    for path, blob in files.items():
-        dest = store_file(path)
-        tmp = dest + ".tmp"
-        with open(tmp, "wb") as f:
-            f.write(blob)
-        os.replace(tmp, dest)
-        done.append(dest)
+    with tmblob.locked(STORE_SCOPE + ".publish") as conn:
+        for path, blob in files.items():
+            dest = store_file(path)
+            tmblob.write(dest, blob, conn=conn)
+            done.append(dest)
     return done
 
 
@@ -577,8 +577,9 @@ POOL_CSID_IS_CID = True
 
 
 def pool_file():
-    """Where the OBSERVED character pools are kept -- see `note_pool`."""
-    return os.path.join(store_dir(), "pool.json")
+    """The record name (tmblob.py) the OBSERVED character pools are kept
+    under -- see `note_pool`."""
+    return STORE_SCOPE + ".pool.json"
 
 
 def note_pool(member_id, cid=None, csid=None, cname=None, cinfo=None):
@@ -600,37 +601,44 @@ def note_pool(member_id, cid=None, csid=None, cname=None, cinfo=None):
     if not mid:
         return False
     try:
-        data = observed_pools()
-        rec = dict(data.get(mid) or {})
-        # `ci_index`, NOT `csid` -- see the POOL_CSID_IS_CID banner. It is the
-        # group writer's own index and it is recorded only so the next reader
-        # can see that it is always 1 and stop being tempted by it.
-        for key, val in (("cid", cid), ("ci_index", csid),
-                         ("cname", cname), ("cinfo", cinfo)):
-            if val not in (None, ""):
-                rec[key] = val
-        lvl = _card_level(cinfo)
-        if lvl is not None:
-            rec["card_level"] = lvl
-        if rec == (data.get(mid) or {}):
-            return False
-        data[mid] = rec
-        os.makedirs(store_dir(), exist_ok=True)
-        tmp = pool_file() + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-        os.replace(tmp, pool_file())
-        return True
-    except OSError:
+        with tmblob.locked(pool_file()) as conn:
+            return _note_pool_in(conn, mid, cid, csid, cname, cinfo)
+    except tmblob.errors():
         return False
+
+
+def _note_pool_in(conn, mid, cid, csid, cname, cinfo):
+    """The body of `note_pool`, inside its transaction."""
+    try:
+        data = _pools_in(tmblob.read_json(pool_file(), conn=conn))
+    except ValueError:
+        data = {}                    # a corrupt record is replaced, as it was
+    rec = dict(data.get(mid) or {})
+    # `ci_index`, NOT `csid` -- see the POOL_CSID_IS_CID banner. It is the
+    # group writer's own index and it is recorded only so the next reader
+    # can see that it is always 1 and stop being tempted by it.
+    for key, val in (("cid", cid), ("ci_index", csid),
+                     ("cname", cname), ("cinfo", cinfo)):
+        if val not in (None, ""):
+            rec[key] = val
+    lvl = _card_level(cinfo)
+    if lvl is not None:
+        rec["card_level"] = lvl
+    if rec == (data.get(mid) or {}):
+        return False
+    data[mid] = rec
+    tmblob.write_json(pool_file(), data, conn=conn)
+    return True
+
+
+def _pools_in(data):
+    return data if isinstance(data, dict) else {}
 
 
 def observed_pools():
     try:
-        with open(pool_file(), encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
+        return _pools_in(tmblob.read_json(pool_file()))
+    except tmblob.errors():
         return {}
 
 
@@ -686,30 +694,43 @@ def cid_for(member_id, content_id=None):
     return 0
 
 
-#: The per-member collection file `tetramaster._collection_file` writes. Named
-#: here rather than imported because `responders` and `tools/tmrank.py` both
-#: need to READ one and neither can import `tetramaster` -- it is a different
-#: container's module and pulling 15k lines in for a filename is how a service
-#: acquires a dependency it does not want.
+#: The per-member collection record `tetramaster._collection_file` writes
+#: (tmblob.py: scope the member, path COLLECTION_PATH). Named here rather than
+#: imported because `responders` and `tools/tmrank.py` both need to READ one
+#: and neither can import `tetramaster` -- it is a different container's
+#: module and pulling 15k lines in for a name is how a service acquires a
+#: dependency it does not want.
 COLLECTION_SUFFIX = ".tm_collection.json"
+COLLECTION_PATH = COLLECTION_SUFFIX[1:]
 
 
-def collection_of(member_id, resource_dir=None):
+def collection_name(member_id):
+    """The record name of one member's collection."""
+    return "%s%s" % (member_id, COLLECTION_SUFFIX)
+
+
+def collection_members():
+    """Every member id (as a string) with a stored collection, sorted."""
+    try:
+        return sorted(n[:-len(COLLECTION_SUFFIX)]
+                      for n in tmblob.names(path=COLLECTION_PATH))
+    except tmblob.errors():
+        return []
+
+
+def collection_of(member_id):
     """One member's collection dict, or `{}`.
 
     The read-only twin of `tetramaster._collection_load`, for callers outside
-    that container. `{}` covers every failure -- missing file, bad JSON, no
+    that container. `{}` covers every failure -- missing record, bad JSON, no
     member -- because every caller's answer to "we have no data" is the same:
     serve nothing rather than serve a default.
     """
     if member_id in (None, ""):
         return {}
-    root = resource_dir or os.path.dirname(store_dir())
     try:
-        with open(os.path.join(root, "%s%s" % (member_id, COLLECTION_SUFFIX)),
-                  encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, ValueError):
+        data = tmblob.read_json(collection_name(member_id))
+    except tmblob.errors():
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -912,8 +933,8 @@ def stats_of(collection):
     return out
 
 
-def load_players(resource_dir=None, names=None, content_ids=None, rookies=None):
-    """Every member with a collection file, as `build_list` records.
+def load_players(names=None, content_ids=None, rookies=None):
+    """Every member with a collection record, as `build_list` records.
 
     `names` is {member id: display name}; a member we have no name for is
     SKIPPED, because a row with an empty name draws as a blank line (rva
@@ -926,24 +947,17 @@ def load_players(resource_dir=None, names=None, content_ids=None, rookies=None):
     `rookies` keeps whatever their own record says, so an explicit
     `rank.rookie` is never overridden by a missing lookup.
     """
-    root = resource_dir or os.path.dirname(store_dir())
     names = names or {}
     content_ids = content_ids or {}
     rookies = rookies or {}
     pools = observed_pools()
     out = []
-    try:
-        entries = sorted(os.listdir(root))
-    except OSError:
-        return out
-    for fn in entries:
-        if not fn.endswith(".tm_collection.json"):
-            continue
-        mid = fn[:-len(".tm_collection.json")]
+    for mid in collection_members():
         try:
-            with open(os.path.join(root, fn)) as f:
-                data = json.load(f)
-        except (OSError, ValueError):
+            data = tmblob.read_json(collection_name(mid))
+        except tmblob.errors():
+            continue
+        if data is None:
             continue
         name = str(names.get(str(mid), "")).strip()
         if not name:

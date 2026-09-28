@@ -314,7 +314,6 @@ _OWNERS = {
     '_collection_add_cards': 'collection',
     '_collection_cards': 'collection',
     '_collection_commit_offer': 'collection',
-    '_collection_dir': 'collection',
     '_collection_file': 'collection',
     '_collection_load': 'collection',
     '_collection_offer': 'collection',

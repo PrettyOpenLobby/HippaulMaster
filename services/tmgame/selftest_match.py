@@ -8,6 +8,7 @@ import tempfile
 import tmbattle
 import struct
 import time
+import tmblob
 import tmstore
 from .deps import tmsave
 from . import (
@@ -64,12 +65,11 @@ def _selftest_continue():
         # 0b. A DECISIVE GAME: the 1st @Ready= does not open the panel, the
         #     loser's 2nd is HELD during the take and released one reply behind
         #     the @GetSelect push, and the winner's 2nd opens its panel.
-        import tempfile as _tf
-        _saved_res = os.environ.get("POL_RESOURCE_DIR")
         _saved_hold = os.environ.get("POL_TM_READY_HOLD_LOSER")
         _saved_turn = dict(boardrules._MATCH_TURN)
+        _sandbox = selftest_run._blob_sandbox()
+        _sandbox.__enter__()
         try:
-            os.environ["POL_RESOURCE_DIR"] = _tf.mkdtemp(prefix="tm-rdy-")
             os.environ["POL_TM_READY_HOLD_LOSER"] = "1"
             _row = b"220|55|0|78|80|18|7|255"
             boardrules._MATCH_TURN[(chan, index)] = {
@@ -97,9 +97,9 @@ def _selftest_continue():
                 common._say("FAIL: the winner's 2nd @Ready= (after the take) opens its "
                      "panel"); ok = False
         finally:
+            _sandbox.__exit__(None, None, None)
             boardrules._MATCH_TURN.clear(); boardrules._MATCH_TURN.update(_saved_turn)
-            for _k, _v in (("POL_RESOURCE_DIR", _saved_res),
-                           ("POL_TM_READY_HOLD_LOSER", _saved_hold)):
+            for _k, _v in (("POL_TM_READY_HOLD_LOSER", _saved_hold),):
                 if _v is None:
                     os.environ.pop(_k, None)
                 else:
@@ -287,17 +287,17 @@ def _selftest_deck_names():
     `POL_TM_CHAMPION_SAVE_SLOT=1`; and a stats sync clears a stale stamp --
     the repair path for the saves written on 2026-09-06.
     """
-    import tempfile
     ok = True
     m = "dnames"
-    env_keys = ("POL_RESOURCE_DIR", "POL_TM_DECK_NAME_BASE",
+    env_keys = ("POL_TM_DECK_NAME_BASE",
                 "POL_TM_CHAMPION_SAVE_SLOT", "POL_TM_CHAMPION_NAME",
                 "POL_TM_SAVE_WRITE", "POL_TM_DECK_NAMES", "POL_TM_DECK_SLOTS")
     saved_env = {k: os.environ.get(k) for k in env_keys}
     if tmsave is None:
         return ok
+    _sandbox = selftest_run._blob_sandbox()
+    _sandbox.__enter__()
     try:
-        os.environ["POL_RESOURCE_DIR"] = tempfile.mkdtemp(prefix="tm-dn-")
         os.environ["POL_TM_SAVE_WRITE"] = "1"
         os.environ["POL_TM_CHAMPION_NAME"] = "laplacier"
         for k in ("POL_TM_DECK_NAME_BASE", "POL_TM_CHAMPION_SAVE_SLOT",
@@ -306,7 +306,7 @@ def _selftest_deck_names():
         path = savefile._save_file(m)
 
         def slots():
-            b = open(path, "rb").read()
+            b = tmblob.read(path)
             return (bytes(b[0x104:0x115]).rstrip(b"\x00"),
                     bytes(b[0x115:0x126]).rstrip(b"\x00"))
 
@@ -315,7 +315,7 @@ def _selftest_deck_names():
         if slots() != (b"COOL DECKS", b""):
             common._say("FAIL: a stored @DN1= name must land on deck tab 1 (+0x104) "
                  "with tab 2 zeroed, got %r" % (slots(),)); ok = False
-        if b"laplacier" in open(path, "rb").read():
+        if b"laplacier" in tmblob.read(path):
             common._say("FAIL: the champion's name must NOT be stamped into the save "
                  "by default -- it is the first deck tab (decided 2026-09-07)")
             ok = False
@@ -341,7 +341,7 @@ def _selftest_deck_names():
         # A 17+ byte name is cut to 16 so the NUL survives.
         collection._collection_store(m, {"cards": [], "deck_names":
                               "@Decks=/C=0@DN1=/S=" + "41" * 20 + "@DN2=/S=42"})
-        b = open(path, "rb").read()
+        b = tmblob.read(path)
         if b[0x104:0x115] != b"A" * 16 + b"\x00" or slots()[1] != b"B":
             common._say("FAIL: a long name must be cut to 16 + NUL and @DN2= must be "
                  "tab 2, got %r" % (b[0x104:0x126],)); ok = False
@@ -354,7 +354,7 @@ def _selftest_deck_names():
                                         [100, 10, 0, 10, 10, 5, 3, 0]]})
 
         def slot8():
-            b = open(path, "rb").read()
+            b = tmblob.read(path)
             return [b[tmsave.CARDS_OFF + tmsave.REC * i + 8] for i in range(3)]
 
         if slot8() != [255, 255, 255]:
@@ -417,6 +417,7 @@ def _selftest_deck_names():
         common._say("FAIL: deck-names selftest raised %r\n%s"
              % (exc, traceback.format_exc())); ok = False
     finally:
+        _sandbox.__exit__(None, None, None)
         for k, v in saved_env.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -476,12 +477,11 @@ def _selftest_card_level():
     # ...and the message carries it. A 0 here LOCKS every VS. COM opponent
     # above the first threshold (PlPrm.BIN +0x02 vs struct +0x00).
     saved = os.environ.get("POL_TM_VSGAME_CP")
-    saved_dir = os.environ.get("POL_RESOURCE_DIR")
+    _sandbox = None
     try:
         os.environ.pop("POL_TM_VSGAME_CP", None)
-        import tempfile
-        _d = tempfile.mkdtemp(prefix="tmcl")
-        os.environ["POL_RESOURCE_DIR"] = _d
+        _sandbox = selftest_run._blob_sandbox()
+        _sandbox.__enter__()
         collection._collection_store("clvl", {"cards": rows, "money": 500})
         body = vscom._comgame_body("clvl", [0] * 7)
         if b"/CP=%d" % want not in body:
@@ -496,10 +496,8 @@ def _selftest_card_level():
             os.environ.pop("POL_TM_VSGAME_CP", None)
         else:
             os.environ["POL_TM_VSGAME_CP"] = saved
-        if saved_dir is None:
-            os.environ.pop("POL_RESOURCE_DIR", None)
-        else:
-            os.environ["POL_RESOURCE_DIR"] = saved_dir
+        if _sandbox is not None:
+            _sandbox.__exit__(None, None, None)
     return ok
 
 

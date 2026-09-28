@@ -8,6 +8,9 @@ test bids). The board showed "High bid 0T by PCTest (2 bids)" on a card nobody
 had bid on, and at its end the sweep would have sold it to PCTest.
 
     python tools/tm_auction_mint_test.py
+
+The bid records are rows of the core's blob table (tmblob.py), so the suite
+runs on a throwaway PostgreSQL database (tmpg.py).
 """
 import os
 import sys
@@ -17,10 +20,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 TMP = tempfile.mkdtemp(prefix="tm-auction-mint-")
 os.environ["POL_RESOURCE_DIR"] = TMP
 os.environ["POL_DATA_DIR"] = TMP
+sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, os.pardir, "services"))
+import tmpg         # noqa: E402
+
+if tmpg.fresh_database() is None:
+    sys.exit(tmpg.skip_or_fail("tm_auction_mint_test"))
 
 import tmtitle as responders   # noqa: E402  the auction store is the title's
 import tmauction    # noqa: E402
+import tmblob       # noqa: E402
 
 fails = []
 
@@ -33,13 +42,9 @@ def check(name, ok, detail=""):
 
 
 def bids(ai, *rows):
-    with open(os.path.join(TMP, "auction-%d.bids.bin" % ai), "wb") as fh:
-        for r in rows:
-            fh.write(r)
+    tmblob.write("auction-%d.bids.bin" % ai, b"".join(rows))
 
 
-check("the store points at the test directory", responders.RESOURCE_DIR == TMP,
-      responders.RESOURCE_DIR)
 check("nothing listed, nothing bid: the first auction is 1", responders._auction_next_id() == 1,
       responders._auction_next_id())
 bids(1, tmauction.build_bid("LaptopTest2", 50, 1787200000, 7),
@@ -49,11 +54,9 @@ check("a settled auction 1 left its bid file: the next is 2, not 1",
 bids(7)
 check("ids with a bid file count even when out of order (7 -> 8)",
       responders._auction_next_id() == 8, responders._auction_next_id())
-with open(os.path.join(TMP, "auction-x.bids.bin"), "wb"):
-    pass
-with open(os.path.join(TMP, "auction-99.bids.bin.tmp"), "wb"):
-    pass
-check("files that are not an auction's bid file are ignored",
+tmblob.write("auction-x.bids.bin", b"")
+tmblob.write("auction-99.bids.bin.tmp", b"")
+check("records that are not an auction's bid record are ignored",
       responders._auction_next_id() == 8, responders._auction_next_id())
 
 if fails:

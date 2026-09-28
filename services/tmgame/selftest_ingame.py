@@ -3,8 +3,8 @@ import uuid
 import inspect
 import json
 import os
-import shutil
 import tmbattle
+import tmblob
 import re
 import struct
 import time
@@ -595,9 +595,9 @@ def _selftest_ingame():
             _d.pop(_tkp, None)
         for _pth in (collection._collection_file("tclo"), collection._save_resource_file("tclo")):
             try:
-                if _pth and os.path.exists(_pth):
-                    os.remove(_pth)
-            except OSError:
+                if _pth:
+                    tmblob.delete(_pth)
+            except tmblob.errors():
                 pass
 
         # --- the PERFECT take: the winner owns EVERY owned card on the board --
@@ -834,9 +834,9 @@ def _selftest_ingame():
             for _m in ("pfw", "pfl"):
                 for _pth in (collection._collection_file(_m), collection._save_resource_file(_m)):
                     try:
-                        if _pth and os.path.exists(_pth):
-                            os.remove(_pth)
-                    except OSError:
+                        if _pth:
+                            tmblob.delete(_pth)
+                    except tmblob.errors():
                         pass
         common._say("selftest: the PERFECT take (all pools, no @GetSelect)")
 
@@ -977,9 +977,9 @@ def _selftest_ingame():
             pots._stake_clear("duA"); pots._stake_clear("duB")
             for _pth in (collection._collection_file("duA"), collection._collection_file("duB")):
                 try:
-                    if _pth and os.path.exists(_pth):
-                        os.remove(_pth)
-                except OSError:
+                    if _pth:
+                        tmblob.delete(_pth)
+                except tmblob.errors():
                     pass
 
         # --- the OBSERVER: @Data=/Watch= answers a @WatchInfo snapshot and
@@ -1394,8 +1394,7 @@ def _selftest_ingame():
         # zero there for as long as this server has existed. This is the
         # delivery assertion, not another ledger one.
         try:
-            with open(savefile._save_file("tclm"), "rb") as _sf:
-                _sb = _sf.read()
+            _sb = tmblob.read(savefile._save_file("tclm")) or b""
             # The DWORD fields, read as dwords. VS. Player Games is NOT among
             # them -- it is a word, and it is checked in the word block below.
             _got = {o: struct.unpack_from("<I", _sb, o)[0]
@@ -1583,9 +1582,9 @@ def _selftest_ingame():
         vscom._COM_GAME.pop(pushqueue._push_key("tclm"), None)
         for _pth in (collection._collection_file("tclm"), collection._save_resource_file("tclm")):
             try:
-                if _pth and os.path.exists(_pth):
-                    os.remove(_pth)
-            except OSError:
+                if _pth:
+                    tmblob.delete(_pth)
+            except tmblob.errors():
                 pass
 
         # ...and put the COM-wager knob back the way it was found.
@@ -1693,9 +1692,9 @@ def _selftest_ingame():
         for _pth in (collection._collection_file("comtest"),
                      collection._save_resource_file("comtest")):
             try:
-                if _pth and os.path.exists(_pth):
-                    os.remove(_pth)
-            except OSError:
+                if _pth:
+                    tmblob.delete(_pth)
+            except tmblob.errors():
                 pass
 
         # --- @Quit= answers in the vocabulary of the code it arrived on -------
@@ -2477,12 +2476,12 @@ def _selftest_ingame():
         # 5 * N (0xC7701) and stops polling command 9.
         pushqueue._PUSHES.clear()
         boardrules._MATCH_TURN.clear()
-        # The stats bump persists games/score_total into the collection dir;
-        # sandbox it so a selftest never writes member files into the live
-        # resource tree.
-        _rsave = os.environ.get("POL_RESOURCE_DIR")
-        _rtmp = tempfile.mkdtemp(prefix="tm-result-")
-        os.environ["POL_RESOURCE_DIR"] = _rtmp
+        # The stats bump persists games/score_total into the collection
+        # record; sandbox the store so this block starts from none and leaves
+        # nothing behind.
+        from . import selftest_run
+        _sandbox = selftest_run._blob_sandbox()
+        _sandbox.__enter__()
         try:
             turns._queue_next_turn("#TM0R001", 1, _seatsD, 10, 0)
             # Past 5xN there is no turn 10 -- but there IS a result, and the
@@ -2534,11 +2533,7 @@ def _selftest_ingame():
                 common._say("FAIL: a re-fired end branch double-counted games; got "
                      "%r" % (_blk,)); ok = False
         finally:
-            if _rsave is None:
-                os.environ.pop("POL_RESOURCE_DIR", None)
-            else:
-                os.environ["POL_RESOURCE_DIR"] = _rsave
-            shutil.rmtree(_rtmp, ignore_errors=True)
+            _sandbox.__exit__(None, None, None)
         pushqueue._PUSHES.clear()
         boardrules._MATCH_TURN.clear()
         turns._queue_next_turn("#TM0R001", 1, _seatsD, 9, 1)
@@ -3189,14 +3184,12 @@ def _selftest_ingame():
             common._say("FAIL: tmprize did not import -- the Prize Center cannot be "
                  "served and no lucky card can be counted"); ok = False
         else:
-            import shutil as _shutil
-            import tempfile as _tempfile
-            _root = _tempfile.mkdtemp(prefix="tm-selftest-prize-")
+            from . import selftest_run
             _envsave = {k: os.environ.get(k) for k in
-                        ("POL_RESOURCE_DIR", "POL_TM_LUCKY_POOL",
-                         "POL_TM_CV_INIT")}
+                        ("POL_TM_LUCKY_POOL", "POL_TM_CV_INIT")}
+            _sandbox = selftest_run._blob_sandbox()
+            _sandbox.__enter__()
             try:
-                os.environ["POL_RESOURCE_DIR"] = _root
                 # Force the week's draw to a pool that CONTAINS the taken card,
                 # so the tally is deterministic without waiting for a Sunday.
                 os.environ["POL_TM_LUCKY_POOL"] = "102,105,106"
@@ -3258,7 +3251,7 @@ def _selftest_ingame():
                         os.environ.pop(k, None)
                     else:
                         os.environ[k] = v
-                _shutil.rmtree(_root, ignore_errors=True)
+                _sandbox.__exit__(None, None, None)
 
         boardrules._MATCH_HANDS.clear(); boardrules._MATCH_TURN.clear(); boardrules._MATCH_BOARD.clear()
         matchstart._TURN_RAND.clear(); pushqueue._PUSHES.clear()

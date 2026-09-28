@@ -22,14 +22,15 @@ rehearsable.
 
 WARNING: **DRY RUN IS THE DEFAULT.** Nothing is written without `--apply`.
 
-WARNING: **RUN IT WHERE THE STATE IS.** The balances live beside the resources
-(`POL_RESOURCE_DIR`, `/data/resources` on prod), so on prod this is
+WARNING: **RUN IT WHERE THE STATE IS.** The balances are the members' collection
+records, rows of the stack's PostgreSQL (the blob table, see
+services/tmblob.py), so run it in a container that has POL_DATABASE_URL:
 
-    docker exec pol-server-authsess-1 python3 /app/../tools/tm_money_reset.py ...
+    docker compose exec -T login python tools/tm_money_reset.py ...
 
-or simply run it in a checkout with `POL_RESOURCE_DIR` pointed at that
-directory. It needs no restart: `_collection_load` opens the JSON per call and
-the save is served from disk.
+or in a checkout with POL_DATABASE_URL pointed at that database. It needs no
+restart: `_collection_load` reads the record per call and the save is served
+from the same table.
 
 WARNING: **A LIVE CLIENT WILL NOT NOTICE UNTIL IT IS TOLD.** The running client holds
 its wallet in memory at save-struct +0xC8; it re-reads the save at launch, and
@@ -50,13 +51,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "services"))
 
 import tetramaster                                              # noqa: E402
+import tmblob                                                   # noqa: E402
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("members", nargs="+",
-                    help="member ids to reset (as they appear in "
-                         "<id>.tm_collection.json)")
+                    help="member ids to reset (the <id> of each "
+                         "<id>.tm_collection.json record)")
     ap.add_argument("--apply", action="store_true",
                     help="actually write; without it this is a dry run")
     ap.add_argument("--to", type=int, default=0,
@@ -69,15 +71,12 @@ def main():
         print("a negative balance is not a number the client can display")
         return 2
 
-    where = tetramaster._collection_dir()
-    print("collection dir: %s" % where)
     print("mode: %s" % ("APPLY -- writing" if args.apply else "DRY RUN"))
     print()
 
     rc = 0
     for mid in args.members:
-        path = tetramaster._collection_file(mid)
-        exists = path and os.path.exists(path)
+        exists = tmblob.exists(tetramaster._collection_file(mid))
         try:
             now = tetramaster.money_of(mid)
         except Exception as exc:

@@ -7,14 +7,22 @@ import struct
 import time
 import tetramaster
 import tmauction
+import tmblob
 import tmroom
 from . import corenames, fetches
 
 
-def _auction_store_file():
-    """This member's exhibit list -- the file the lobby band already serves.
+def _store_errors():
+    """What a read or write of the auction's records raises when the store
+    cannot be reached, as a tuple for `except`."""
+    return (OSError,) + tmblob.errors()
 
-    ONE FILE IS THE WHOLE STORE. `_resource_blob` hands these bytes to `3:0` and
+
+def _auction_store_file():
+    """The record name of this member's exhibit list -- the resource the lobby
+    band already serves (tmblob.py; the core's `_resource_file` names it).
+
+    ONE RECORD PER SELLER IS THE WHOLE STORE. `_resource_blob` hands these bytes to `3:0` and
     `_fetch_len` measures the same file, so the `<SN>` computed here cannot
     drift from what the client is given. Two different CONTAINERS answer those
     two bands, so a shared file is the only thing that can keep them in step --
@@ -23,21 +31,31 @@ def _auction_store_file():
     return corenames._resource_file(fetches._EXHIBIT_LIST_PATH)
 
 
-def _write_resource(path, data):
-    """Write a resource blob atomically, creating the directory if need be.
+def _write_resource(name, data, conn=None):
+    """Store a resource blob under its record name, in one statement.
 
-    Atomic because the LOBBY BAND reads this file from another container while
-    the auth band writes it: a torn write is a client handed half a record, and
-    `_fetch_len` would have measured the other half. `os.replace` is the same
-    move the stamp/spool writers here already use.
+    Atomic because the LOBBY BAND reads this record from another container
+    while the auth band writes it: a torn write is a client handed half a
+    record, and `_fetch_len` would have measured the other half.
     """
-    d = os.path.dirname(path)
-    if d:
-        os.makedirs(d, exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "wb") as f:
-        f.write(data)
-    os.replace(tmp, path)
+    tmblob.write(name, data, conn=conn)
+
+
+def _read_resource(name):
+    """The stored bytes of a record, or None when there is none."""
+    return tmblob.read(name)
+
+
+#: The path part of every seller's exhibit-list record, `U_g_TM0_EXHIBITLIST.bin`
+#: (the core's `_resource_file` flattening of the path, plus `.bin`).
+def _exhibit_suffix():
+    return re.sub(r"[^A-Za-z0-9._-]", "_", fetches._EXHIBIT_LIST_PATH) + ".bin"
+
+
+def _exhibit_names():
+    """Every seller's exhibit-list record, sorted by name (it was a glob of
+    `*.<suffix>` over the resources directory)."""
+    return tmblob.names(path=_exhibit_suffix())
 
 
 #: The BROWSE result. It cannot share `U/g/TM0_EXHIBITLIST`: that path is
@@ -58,21 +76,23 @@ _AUCTION_BIDHIST_PATH = "U/g/TM0_BIDHIST"
 
 
 def _auction_bids_file(auction_id):
-    """Where auction `n`'s bids live -- GLOBAL, not per member.
+    """The record name of auction `n`'s bids -- GLOBAL, not per member.
 
     A bid history is the same for everyone looking at that auction, unlike the
     exhibit list, which is per seller. So this is keyed on the auction id and
-    lives outside the member-scoped naming `_resource_file` applies.
+    lives outside the member-scoped naming `_resource_file` applies: the blob
+    (`auction-<n>`, `bids.bin`), the old file name split at its first dot.
     """
-    return os.path.join(corenames.RESOURCE_DIR, "auction-%d.bids.bin" % int(auction_id))
+    return "auction-%d.bids.bin" % int(auction_id)
 
 
 def _auction_bids(auction_id):
     """Auction `n`'s bid rows, sorted, or b"" if nobody has bid."""
     try:
-        with open(_auction_bids_file(auction_id), "rb") as f:
-            blob = f.read()
-    except OSError:
+        blob = _read_resource(_auction_bids_file(auction_id)) or b""
+    except _store_errors():
+        return b""
+    if not blob:
         return b""
     if len(blob) % tmauction.BID_REC:
         corenames.log("lobby", f"  auction: bids for {auction_id} are {len(blob)}B, not a "
@@ -89,13 +109,12 @@ def _auction_find(auction_id):
     where the bidder has no idea whose listing it is -- which is exactly why
     `<AI>` had to become globally unique before this function could exist.
     """
-    import glob
-    suffix = re.sub(r"[^A-Za-z0-9._-]", "_", fetches._EXHIBIT_LIST_PATH) + ".bin"
-    for fn in sorted(glob.glob(os.path.join(corenames.RESOURCE_DIR, "*." + suffix))):
+    for fn in _exhibit_names():
         try:
-            with open(fn, "rb") as f:
-                blob = f.read()
-        except OSError:
+            blob = _read_resource(fn)
+        except _store_errors():
+            continue
+        if blob is None:
             continue
         for i in range(tmauction.count(blob)):
             try:
@@ -131,26 +150,26 @@ def _auction_with_bid_counts(blob):
 def _auction_all_rows():
     """Every member's listings, concatenated -- the browse result set.
 
-    The per-member store files ARE the database, so the aggregate is a glob and
-    a join. Sorted by filename purely so the order is stable between requests;
+    The per-member store records ARE the database, so the aggregate is a
+    listing and a join. Sorted by name purely so the order is stable between
+    requests;
     the client is told a count and hands back an `<AI>`, neither of which
     depends on order, but an unstable list would reshuffle under a player
     mid-scroll.
     """
-    import glob
-    suffix = re.sub(r"[^A-Za-z0-9._-]", "_", fetches._EXHIBIT_LIST_PATH) + ".bin"
     out = bytearray()
-    for fn in sorted(glob.glob(os.path.join(corenames.RESOURCE_DIR, "*." + suffix))):
+    for fn in _exhibit_names():
         try:
-            with open(fn, "rb") as f:
-                blob = f.read()
-        except OSError:
+            blob = _read_resource(fn)
+        except _store_errors():
+            continue
+        if blob is None:
             continue
         # A short tail is a torn or hand-edited file. Take the whole records and
         # say so rather than serving a fragment: `_fetch_len` measures what we
         # write, so a partial record would be a length the reader cannot use.
         if len(blob) % tmauction.REC:
-            corenames.log("lobby", f"  auction: {os.path.basename(fn)} is {len(blob)}B, "
+            corenames.log("lobby", f"  auction: {fn} is {len(blob)}B, "
                          f"not a whole number of 0x{tmauction.REC:X} records -- "
                          f"taking the first {len(blob) // tmauction.REC}")
             blob = blob[:len(blob) // tmauction.REC * tmauction.REC]
@@ -170,10 +189,9 @@ def _auction_next_id():
     rendering "High bid 0 by PCTest (2 bids)" on a listing nobody had bid on --
     and at `<NC>` the sweep would have SOLD the card to PCTest for 100.
     """
-    import glob
     used = tmauction.max_auction_id(_auction_all_rows())
-    for fn in glob.glob(os.path.join(corenames.RESOURCE_DIR, "auction-*.bids.bin")):
-        m = re.match(r"auction-(\d+)\.bids\.bin$", os.path.basename(fn))
+    for fn in tmblob.names(path="bids.bin"):
+        m = re.match(r"auction-(\d+)\.bids\.bin$", fn)
         if m:
             used = max(used, int(m.group(1)))
     return used + 1
@@ -200,15 +218,14 @@ def _auction_count_rows(now=None):
     (a relist only resets `<CM>`/`<BC>`, and a no-bid row already has `<CM>`=0,
     so banding by `asking_price` is unchanged), so those are counted as-is.
     """
-    import glob
     now = int(now if now is not None else time.time())
-    suffix = re.sub(r"[^A-Za-z0-9._-]", "_", fetches._EXHIBIT_LIST_PATH) + ".bin"
     out = bytearray()
-    for fn in sorted(glob.glob(os.path.join(corenames.RESOURCE_DIR, "*." + suffix))):
+    for fn in _exhibit_names():
         try:
-            with open(fn, "rb") as f:
-                blob = f.read()
-        except OSError:
+            blob = _read_resource(fn)
+        except _store_errors():
+            continue
+        if blob is None:
             continue
         if len(blob) % tmauction.REC:
             blob = blob[:len(blob) // tmauction.REC * tmauction.REC]
@@ -232,10 +249,10 @@ def _auction_rows():
     a real store makes it a phantom listing in everybody's Cards for Sale.
     """
     try:
-        with open(_auction_store_file(), "rb") as f:
-            return _auction_with_bid_counts(f.read())
-    except OSError:
+        blob = _read_resource(_auction_store_file())
+    except _store_errors():
         return b""
+    return _auction_with_bid_counts(blob) if blob else b""
 
 
 #: THE AUCTION-NOTICE SENDER. SE authored these server-side, so the "From" is
@@ -347,15 +364,14 @@ def _auction_sweep(now=None):
     """
     if tmauction is None:
         return
-    import glob
     now = int(now if now is not None else time.time())
-    suffix = re.sub(r"[^A-Za-z0-9._-]", "_", fetches._EXHIBIT_LIST_PATH) + ".bin"
     relisted = stuck_sold = stuck_unsold = sold = unsold = 0
-    for fn in sorted(glob.glob(os.path.join(corenames.RESOURCE_DIR, "*." + suffix))):
+    for fn in _exhibit_names():
         try:
-            with open(fn, "rb") as f:
-                blob = f.read()
-        except OSError:
+            blob = _read_resource(fn)
+        except _store_errors():
+            continue
+        if blob is None:
             continue
         out, changed, drop = bytearray(blob), False, []
         for i in range(tmauction.count(blob)):
@@ -371,7 +387,7 @@ def _auction_sweep(now=None):
                 # the card. `_auction_bids` sorts ascending, so the last row is
                 # the highest -- the winner.
                 win = tmauction.read_bid(bids, tmauction.bid_count(bids) - 1)
-                seller = os.path.basename(fn).split(".", 1)[0]
+                seller = fn.split(".", 1)[0]
                 # WARNING: RESOLVE THE WINNER TO A MEMBER ID. Bid rows recorded
                 # before the member id reached the recorder carry member=0
                 # (measured: auction 1's two rows, 2026-08-20), and a pending
@@ -394,7 +410,7 @@ def _auction_sweep(now=None):
                     # Card" the way a shared `cards` list did.
                     tmauction.add_pending(winner or win["name"],
                                           won=rec["ii"])
-                except OSError as e:
+                except _store_errors() as e:
                     # PENDING FIRST, REMOVAL SECOND. If the credit does not
                     # land, the listing stays -- a card that still exists is
                     # recoverable, a deleted one is not.
@@ -454,10 +470,10 @@ def _auction_sweep(now=None):
                                 f"relisting, {rec['am'] - 1} relist(s) left")
             else:
                 # UNSOLD and out of relists -- the card goes back to its owner.
-                seller = os.path.basename(fn).split(".", 1)[0]
+                seller = fn.split(".", 1)[0]
                 try:
                     tmauction.add_pending(seller, card=rec["ii"])
-                except OSError as e:
+                except _store_errors() as e:
                     corenames.log("authserv", f"  auction: {rec['ai']} unsold but the "
                                     f"return failed ({e}) -- holding")
                     stuck_unsold += 1
@@ -477,9 +493,9 @@ def _auction_sweep(now=None):
         if changed:
             try:
                 _write_resource(fn, bytes(out))
-            except OSError as e:
+            except _store_errors() as e:
                 corenames.log("authserv", f"  auction: cannot write the relist for "
-                                f"{os.path.basename(fn)} ({e}) -- left as is")
+                                f"{fn} ({e}) -- left as is")
     if stuck_sold or stuck_unsold:
         # One summary line, not one per listing per request: this fires on every
         # auction request and would otherwise bury the log.
@@ -585,7 +601,7 @@ def _tm_auction_reply(payload):
         n = tmauction.count(rows)
         try:
             _write_resource(corenames._resource_file(_AUCTION_BROWSE_PATH), rows)
-        except OSError as e:
+        except _store_errors() as e:
             corenames.log("authserv", f"  auction: cannot stage the browse list ({e}) -- "
                             f"declining so the client gets <SF>, not a count "
                             f"it cannot fetch")
@@ -614,7 +630,7 @@ def _tm_auction_reply(payload):
         n = tmauction.count(rows)
         try:
             _write_resource(corenames._resource_file("U/g/TM0_BIDLIST"), rows)
-        except OSError as e:
+        except _store_errors() as e:
             corenames.log("authserv", f"  auction: cannot stage the bid-on list ({e}) -- "
                             f"declining, the static entry answers <SN>(0)")
             return None, False
@@ -647,7 +663,7 @@ def _tm_auction_reply(payload):
         n = tmauction.bid_count(bids)
         try:
             _write_resource(corenames._resource_file(_AUCTION_BIDHIST_PATH), bids)
-        except OSError as e:
+        except _store_errors() as e:
             corenames.log("authserv", f"  auction: cannot stage the bid history ({e}) -- "
                             f"declining so the client gets <HF>, not a count "
                             f"it cannot fetch")
@@ -722,11 +738,15 @@ def _tm_auction_reply(payload):
         new_blob = (blob[:idx * tmauction.REC] + updated
                     + blob[(idx + 1) * tmauction.REC:])
         try:
-            _write_resource(fn, new_blob)
-            _write_resource(_auction_bids_file(ai),
-                            _prev_bids
-                            + tmauction.build_bid(bidder, bm, now, member))
-        except OSError as e:
+            # the listing and its bid in ONE transaction: a bid is on record
+            # with its listing's <BC> or not at all
+            with tmblob.locked(_auction_bids_file(ai)) as conn:
+                _write_resource(fn, new_blob, conn=conn)
+                _write_resource(_auction_bids_file(ai),
+                                _prev_bids
+                                + tmauction.build_bid(bidder, bm, now, member),
+                                conn=conn)
+        except _store_errors() as e:
             corenames.log("authserv", f"  auction: cannot record the bid ({e}) -- "
                             f"declining so the client gets <BF>, not a bid we "
                             f"did not keep")
@@ -821,7 +841,7 @@ def _tm_auction_reply(payload):
         blob = rows + rec
         try:
             _write_resource(_auction_store_file(), blob)
-        except OSError as e:
+        except _store_errors() as e:
             # STORING IS THE POINT. Answering <ES> for a listing we did not keep
             # is the AUCMONEY trap one door over -- the client would accept a
             # sale with no backing record and never reconcile it. Fall through

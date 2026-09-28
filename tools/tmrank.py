@@ -17,7 +17,8 @@ A rebuild landing between those two would tell the client one length and
 hand it another, which is POL-5135's shape. Once a week, out of band, cannot.
 
 WHERE THE NUMBERS COME FROM. A member's ranking stats live in the `rank` block
-of `<member>.tm_collection.json`, beside their cards:
+of their collection record (`<member>.tm_collection.json`, a row of the core's
+blob table; see services/tmblob.py), beside their cards:
 
     {"cards": [...], "money": 4321,
      "rank": {"rating": 296, "rating_last": 250,
@@ -134,8 +135,7 @@ def _players(args, stamp):
             data = json.load(f)
         return data["players"] if isinstance(data, dict) else data
     cids, rookie = _from_db(stamp, args.rookie_days)
-    return tmrank.load_players(resource_dir=args.resource_dir, names=_names(),
-                               content_ids=cids, rookies=rookie)
+    return tmrank.load_players(names=_names(), content_ids=cids, rookies=rookie)
 
 
 def _build(players, stamp):
@@ -205,8 +205,6 @@ def main():
     ap.add_argument("--dump", metavar="FILE", help="decode a list file or header")
     ap.add_argument("--players", metavar="JSON",
                     help="take players from this file instead of live state")
-    ap.add_argument("--resource-dir", metavar="DIR",
-                    help="where the *.tm_collection.json live")
     ap.add_argument("--stamp", type=int, default=None,
                     help="the next-update UNIX time (default: next Sunday)")
     ap.add_argument("--rookie-days", type=int,
@@ -272,7 +270,8 @@ def main():
     files, counts = _build(players, stamp)
     _report(files, counts, players)
     if a.dry_run:
-        print("dry run -- nothing written (store would be %s)" % tmrank.store_dir())
+        print("dry run -- nothing written (the lists would be the %s records)"
+              % tmrank.STORE_SCOPE)
         return 0
     if not players:
         print("REFUSING to publish an empty tally: every list would be 0 rows, "
@@ -282,14 +281,13 @@ def main():
     for dest in tmrank.write_store(files):
         print("wrote %s" % dest)
     if a.correct:
-        _rollover(players, a.resource_dir, stamp, reset_week=False,
-                  replace_grants=True)
+        _rollover(players, stamp, reset_week=False, replace_grants=True)
     elif not a.no_rollover:
-        _rollover(players, a.resource_dir, stamp)
+        _rollover(players, stamp)
     return 0
 
 
-def _rollover(players, resource_dir, stamp=None, reset_week=True,
+def _rollover(players, stamp=None, reset_week=True,
               replace_grants=False):
     """The weekly write-back, run only after a REAL publish.
 
@@ -307,7 +305,7 @@ def _rollover(players, resource_dir, stamp=None, reset_week=True,
     for a re-published week, without zeroing the Weekly Total a new week has
     already started accumulating, and with UNPAID grants replaced.
     """
-    root = resource_dir or os.path.dirname(tmrank.store_dir())
+    import tmblob
     since = tmrank.tally_start(stamp) if stamp else None
     # The published position per member per menu: tmrank.ranked IS build_list's
     # sort, so these cannot disagree with the files just written.
@@ -318,24 +316,22 @@ def _rollover(players, resource_dir, stamp=None, reset_week=True,
     rolled = 0
     for p in players:
         mid = str(p.get("member_id"))
-        fn = os.path.join(root, "%s.tm_collection.json" % mid)
+        fn = tmrank.collection_name(mid)
+        # read, stamp and write back in one transaction holding the record's
+        # lock, so a match result landing meanwhile is not overwritten
         try:
-            with open(fn) as f:
-                data = json.load(f)
-        except (OSError, ValueError):
-            continue
-        block = data.setdefault("rank", {})
-        if reset_week:
-            block["prize_week"] = 0
-        block["last_rank"] = {str(m): r
-                              for m, r in (ranks.get(mid) or {}).items()}
-        tmp = fn + ".tmp"
-        try:
-            with open(tmp, "w") as f:
-                json.dump(data, f)
-            os.replace(tmp, fn)
+            with tmblob.locked(fn) as conn:
+                data = tmblob.read_json(fn, conn=conn)
+                if not isinstance(data, dict):
+                    continue
+                block = data.setdefault("rank", {})
+                if reset_week:
+                    block["prize_week"] = 0
+                block["last_rank"] = {str(m): r
+                                      for m, r in (ranks.get(mid) or {}).items()}
+                tmblob.write_json(fn, data, conn=conn)
             rolled += 1
-        except OSError as exc:
+        except tmblob.errors() as exc:
             print("rollover: could not write %s (%r)" % (fn, exc))
     print("rolled over %d member(s): %slast_rank stamped"
           % (rolled, "prize_week <- 0, " if reset_week else ""))
@@ -356,29 +352,21 @@ def _rollover(players, resource_dir, stamp=None, reset_week=True,
     except ImportError as exc:                                # pragma: no cover
         print("ranking prizes NOT granted: tmprize did not import (%r)" % (exc,))
         return
-    saved_dir = os.environ.get("POL_RESOURCE_DIR")
-    os.environ["POL_RESOURCE_DIR"] = root
     granted = 0
-    try:
-        publish_id = tmprize.week_id()
-        # A correction visits EVERY member, not just the placed ones: a member
-        # the wrong publish placed and the right one does not still holds an
-        # unpaid grant, and only a visit can withdraw it.
-        mids = sorted(set(ranks) | ({str(p.get("member_id")) for p in players}
-                                    if replace_grants else set()))
-        for mid in mids:
-            by_menu = ranks.get(mid) or {}
-            got = tmprize.grant_ranking(mid, publish_id,
-                                        top30_rank=by_menu.get(1),
-                                        rookie_rank=by_menu.get(2),
-                                        say=print, replace=replace_grants)
-            if got:
-                granted += 1
-    finally:
-        if saved_dir is None:
-            os.environ.pop("POL_RESOURCE_DIR", None)
-        else:
-            os.environ["POL_RESOURCE_DIR"] = saved_dir
+    publish_id = tmprize.week_id()
+    # A correction visits EVERY member, not just the placed ones: a member
+    # the wrong publish placed and the right one does not still holds an
+    # unpaid grant, and only a visit can withdraw it.
+    mids = sorted(set(ranks) | ({str(p.get("member_id")) for p in players}
+                                if replace_grants else set()))
+    for mid in mids:
+        by_menu = ranks.get(mid) or {}
+        got = tmprize.grant_ranking(mid, publish_id,
+                                    top30_rank=by_menu.get(1),
+                                    rookie_rank=by_menu.get(2),
+                                    say=print, replace=replace_grants)
+        if got:
+            granted += 1
     print("ranking prizes: %d member(s) granted for publish %s (paid at each "
           "member's next Prize Center open)" % (granted, publish_id))
 
