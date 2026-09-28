@@ -64,6 +64,8 @@ SUITES = [
     ("tm_save_defaults", [PY, "tm_save_defaults_test.py"],     HERE,     True),
     # --- the state outside the process: PostgreSQL tables and Valkey keys ----
     ("tm_store",      [PY, "tm_store_test.py"],                HERE,     True),
+    # the files an earlier release kept, imported into those tables
+    ("tm_import",     [PY, "tm_import_test.py"],               HERE,     True),
     # the core's own resource suite, with this title loaded
     ("core_resource", [PY, os.path.join(CORE or "", os.pardir, "tools",
                                         "resource_test.py")],
@@ -75,12 +77,12 @@ SUITES = [
 #: every suite that reads or writes a member's collection, save, prize record,
 #: the auction's records or the ranking lists (tmblob.py: they are rows of the
 #: core's blob table), this repository's store suite, the board suites (the
-#: names and portraits come from the account tables), and the core's resource
-#: suite, whose accounts live in PostgreSQL too
+#: names and portraits come from the account tables), the import of the old
+#: files, and the core's resource suite, whose accounts live in PostgreSQL too
 NEEDS_DB = {"tetramaster", "tmrank", "tm_backfill", "tm_auction_mint",
             "tm_watch", "tm_board", "tm_faces", "tm_gameea_refuse",
             "tm_lobby_counts", "tm_roster_delta_base", "tm_roster_retire",
-            "tm_save_defaults", "tm_store", "core_resource"}
+            "tm_save_defaults", "tm_store", "tm_import", "core_resource"}
 
 
 def _fresh_database():
