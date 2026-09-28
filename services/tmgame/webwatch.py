@@ -424,7 +424,7 @@ def _watch_state(key, phase):
         "turn": int(rec.get("turn") or 0), "active": int(rec.get("active") or 0),
         "limit": common._env_int("POL_TM_TURN_LIMIT", 5 * n),
         # "mid" = the member id, for the board to find the player's PlayOnline
-        # portrait in accounts.db; the board STRIPS it before serving anything
+        # portrait in the account database; the board STRIPS it before serving anything
         "players": [{"name": nm, "com": com, "hand": h, "score": scores[i],
                      "ci": ci, "vote": vote(com, vk),
                      "mid": (int(vk) if isinstance(vk, int) or str(vk).isdigit() else None)}
