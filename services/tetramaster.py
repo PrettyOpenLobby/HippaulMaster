@@ -5413,6 +5413,79 @@ def _gameea_en():
         return 1
 
 
+#: `/EN=` REFUSALS -- the four codes the reserve scene has its own words for.
+#: Project Crystal Server answers `@GameEN=` with these (its Table.cs):
+#:
+#:     -32872  all reservations were cancelled
+#:     -32871  cannot make a reservation
+#:     -32870  this table is full
+#:     -32869  already registered
+#:
+#: and TM.dll bears them out. The reserve scene stores the verdict at
+#: `[scene+0x188]` (`0x8F96B`), clears the my-reservation global
+#: 0x52461D0/D4/DC on any negative (`0x8FA56`/`0x8FA81`), sends -32871 to state
+#: 0x136 and every other negative to state 0x12C, and state 0x12C (`0x8FE47`)
+#: indexes `verdict + 0x8068` through a four-entry jump table (0x90344):
+#: -32872 -> message 0x65, -32870 -> 0x64, -32869 -> 0x6D, anything else 0x68.
+#: So each code has its own dialog; the text behind 0x64/0x6D comes from
+#: Crystal's labels and has not been read off a screen here.
+#:
+#: We send two, and only where our seat list can tell:
+#:   * FULL (-32870): THREE other members already hold seats here. A match is
+#:     at most three players: the deal table has board sizes for 2 and 3 only
+#:     (`TILES_BY_PLAYERS`, read off the image), and Crystal's table caps at 3
+#:     too. `POL_TM_TABLE_MAX_SEATS` moves the number; the row's own capacity
+#:     (`row[4]`, 8 in every fixture row) still bounds it. The client pre-checks
+#:     a count of its own before sending (`0x8F8E9`, limit not decoded), so this
+#:     is mostly the race guard for two joiners on one last seat.
+#:     `POL_TM_GAMEEA_REFUSE=0` turns both refusals off.
+#:   * ALREADY REGISTERED (-32869): the member already holds a seat at THIS
+#:     table. WARNING: DEFAULT OFF (`POL_TM_GAMEEA_REFUSE_DUP=1` to enable). The reserve
+#:     scene deliberately lets a player re-send `@GameEN=` for a tile that reads
+#:     "reserved by me" (display codes 1/5 at `0x8F8BD` -> `[scene+0x198]=1`),
+#:     and our seats outlive the client's own my-table global (scene teardown
+#:     clears it). Refusing there would
+#:     strand a player on their own table, which the current re-seat does not.
+GAMEEA_TABLE_FULL = -32870
+GAMEEA_ALREADY_REGISTERED = -32869
+
+
+def _gameea_refusal(member_id, peer_nick):
+    """A negative `/EN=` for this `@GameEN=`, or None to seat as before.
+
+    Reads the seat list and the table row only; changes nothing. Anything it
+    cannot place (no room, no table, no row) is None, so an unknown case keeps
+    today's behaviour.
+    """
+    if member_id is None or _env_int("POL_TM_GAMEEA_REFUSE", 1) == 0:
+        return None
+    try:
+        import tmroom
+        chan = tmroom.room_of(member_id)
+        if not chan:
+            return None
+        index, _why = table_index_for_peer(peer_nick, tmroom.room_peer(chan),
+                                           chan=chan)
+        if index is None:
+            return None
+        seats = _seats_of(chan).get(index) or []
+        mine = any(m == member_id for m, _i in seats)
+        if mine:
+            if _env_int("POL_TM_GAMEEA_REFUSE_DUP", 0):
+                return GAMEEA_ALREADY_REGISTERED
+            return None
+        row, _authored = _table_rows(tmroom, chan, index)
+        cap = _env_int("POL_TM_TABLE_MAX_SEATS", 3)
+        row_cap = int(row[4] or 0) if row and len(row) > 4 else 0
+        if row_cap:
+            cap = min(cap, row_cap) if cap > 0 else row_cap
+        if cap > 0 and len(seats) >= cap:
+            return GAMEEA_TABLE_FULL
+    except Exception as exc:
+        _say("tm:   @GameEN= refusal check skipped (%r)" % (exc,))
+    return None
+
+
 def _gameml_enabled():
     return os.environ.get("POL_TM_GAMEML", "1") != "0"
 
@@ -6103,8 +6176,8 @@ def _teach_opts():
 #: ours, which is why nothing server-side has ever known about it.
 #:
 #: WARNING: ONE OPEN VARIABLE. In client memory these ids appear as `client_guid XOR K`
-#: (K = 0xAB12CDD0E4BCBB90 on the measured install, constant across both peers --
-#: the client-local guid key). Whether the value we put in
+#: (K = `tmroom.CLIENT_KEY_DEFAULT`, constant across both peers -- the
+#: client-local guid key). Whether the value we put in
 #: `/Shm=` is expected in RAW or XORed form is NOT yet established. We serve RAW,
 #: because raw is the form the server can compute for anyone; if the launch shows
 #: `@Init=` addressed to a garbage nick instead of the peer, the XOR is needed and
@@ -16384,6 +16457,17 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
         # Neither is written here: the state values are a 7-way vocabulary we
         # have only partly decoded, and the nibble order of those ids is not
         # pinned -- and an id fed to a consumer is worse than a blank tile.
+        #
+        # A FULL TABLE (or, opt-in, a repeat) IS REFUSED FIRST, before any seat
+        # moves -- `_seat_at_table` would otherwise take this member off the
+        # table they already hold elsewhere. See `_gameea_refusal`.
+        refused = _gameea_refusal(member_id, peer_nick)
+        if refused is not None:
+            _say("tm: member %s @GameEN= REFUSED -- /EN=%d (%s); no seat moved"
+                 % (member_id, refused,
+                    "table full" if refused == GAMEEA_TABLE_FULL
+                    else "already registered"))
+            return encode_code(MSG_GAMEEA) + (b"@GameEA=/EN=%d" % refused)
         n = _seat_at_table(member_id, peer_nick, seated=True, cmd=cmd)
         # Start the heartbeat clock AT the reservation: the first table-peer
         # @Pong lands ~6 s later (measured), and a stampless seat would
