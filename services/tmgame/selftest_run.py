@@ -838,6 +838,18 @@ def _selftest_all():
                   "point of the knob"); ok = False
         del os.environ["POL_TM_CHECKOUT_INIT"]
 
+        # @EcmInit's /M= ASSIGNS the wallet (0x105816), so Check Out must serve
+        # the member's balance there, never the proceeds - a buyer's proceeds
+        # are 0 and would zero their gil.
+        _was_m = purse.money_of(1)
+        purse._set_money(1, 450, "selftest: a buyer's wallet")
+        _ecm = shopdoors._init_body("EcmInit", 1, 0)
+        if b"/M=450/" not in _ecm:
+            common._say("FAIL: Check Out's @EcmInit must carry the wallet in /M= "
+                  "(450), not the proceeds - the arm stores it at +0xC8: %r"
+                  % _ecm); ok = False
+        purse._set_money(1, _was_m, "selftest: restoring")
+
         # Money must never go negative, whatever it is asked to store.
         # Assert on the STORED value, not on money_of() -- both clamp, so a
         # reader-side clamp would hide a writer that persisted -50.
