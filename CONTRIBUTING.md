@@ -32,14 +32,20 @@ services/
   tm_cardprm.py     card parameters from your install's CardPrm.BIN
   tmfixtures.py     the lobby and default-data blobs the client fetches
   tmtables.py       the table-truth report
+  tmstore.py        reaches the core's polcore: the durable tables and the
+                    live keys (tm:*); migrate and status
+  tm_migrations/    CrystalMaster's migrations, numbered from 3001
+  tmblob.py         collections, saves, prizes, auction records and rank
+                    lists as rows of the core's blob table
   boardtm.py        the optional live board (rankings, auction, matches)
   polboards.py      the board service and its Discord posting
   polgateway.py     the Discord Gateway presence for the board bot
   tmdata/           the client's parameter tables, decoded from YOUR install
                     by tools/tmdata_build.py (only card_names_en.txt ships)
   boardart/         the board's fonts; its art is baked from your install
-tools/              self-tests (`*_test.py`), the runner (tm_run_all.py) and
-                    operator tools (tmrank_job.py, tm_money_reset.py, ...)
+tools/              self-tests (`*_test.py`), the runner (tm_run_all.py),
+                    the test database helper (tmpg.py) and operator tools
+                    (tmrank_job.py, tm_money_reset.py, ...)
 config/polpro.json  reply templates for the POLpro plaintext channel
 ```
 
@@ -142,8 +148,54 @@ checked out beside this repository (or `OPENLOBBY_SERVICES` pointing at its
 current drive; point `POL_DATA_DIR` at a scratch folder to keep runs apart.
 GitHub Actions runs the same commands on every pull request.
 
+Every suite imports the core's `polcore`, so the core has to be found for
+all of them, and the drivers have to be installed
+(`pip install "psycopg[binary]" psycopg-pool valkey`). The suites in
+`NEEDS_DB` in `tools/tm_run_all.py` each get an empty PostgreSQL database
+of their own from `tools/tmpg.py`, which uses Docker or the server
+`POL_TEST_DATABASE_URL` names; `tm_store_test` also starts a Valkey, or uses
+`POL_TEST_VALKEY_URL`. Without a server those suites report SKIP, and
+`POL_TEST_REQUIRE_DB=1` makes that a failure. The board suites (`tm_board`,
+`tm_faces`) are among them, because the board takes names and portraits
+from the core's account tables; a running board needs `POL_DATABASE_URL` for
+the same reason and draws without names when it cannot reach the database.
+
 A new self-test is registered by hand in `tools/tm_run_all.py`. The list is
 explicit on purpose: a suite that is not registered does not run.
+
+## Where state lives
+
+Tetra Master keeps no files of its own. Anything that must survive a
+restart is in the core's PostgreSQL. A member's collection, save and prize
+record, the auction's records and the rank lists are rows of the core's
+`blob` table, read and written through `services/tmblob.py` under their old
+file names. A read-modify-write goes through `tmblob.locked(name)`, one
+transaction holding a lock named after the record, so two containers
+updating the same record take turns. The tournament standings, the weekly
+champion and the board's Discord bookkeeping are CrystalMaster's own tables
+(`tm_*`), through `tmstore.py`. Live state that several containers read
+(the room roster, the matches being watched, an accept quorum) goes in
+Valkey through the core's `polcore.kv` under `tm:` keys. Nothing durable
+goes in Valkey: losing it loses who is seated and what is being played, and
+nothing else. A file is only for what the operator edits, such as
+`tm_chat_roster.txt`.
+
+A selftest that needs an empty store wraps its work in
+`selftest_run._blob_sandbox()`. It runs only on the throwaway database
+`tm_run_all.py` made (`TM_TEST_DATABASE=1`) and refuses anywhere else.
+
+A schema change is a new file in `services/tm_migrations/` with the next
+number. A shipped migration is never edited. The core's `schema_migrations`
+table is keyed by the number alone and shared with the core and the other
+titles, so CrystalMaster keeps to 3001-3999 and a table name that starts
+with `tm_`; a reused number is silently skipped.
+
+`live_sessions.py` is the core's. Tetra Master publishes its live-match
+count with `live_sessions.write_marker` (`live:tm`); a copy of the module
+must not be added here. `.dockerignore` keeps one out of the image and the
+build refuses an image whose `live_sessions` is not the core's. A deploy
+script asks a running container, for example
+`docker compose exec -T authsess python live_sessions.py count tm`.
 
 ## What a pull request needs
 
