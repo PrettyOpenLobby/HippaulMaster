@@ -89,7 +89,7 @@ def _names():
 
 
 def _from_db(stamp, rookie_days):
-    """{member: Content ID} and {member: is a rookie}, from accounts.db.
+    """{member: Content ID} and {member: is a rookie}, from the account database.
 
     THE CONTENT ID IS THE ROW'S IDENTITY (`tmrank.cid_for`) -- the value the
     client hands back to us in `<CR>`, which is what makes `Your Rank:` resolve
@@ -119,11 +119,11 @@ def _from_db(stamp, rookie_days):
         for row in conn.execute(
                 "SELECT h.member_id AS member_id, hc.content_id AS content_id"
                 " FROM handle_content hc JOIN handle h ON h.id = hc.handle_id"
-                " WHERE hc.content_code = ? AND hc.content_id IS NOT NULL",
+                " WHERE hc.content_code = %s AND hc.content_id IS NOT NULL",
                 (tmrank.POOL_CONTENT_CODE,)):
             cids[str(row["member_id"])] = row["content_id"]
     except Exception as exc:
-        print("accounts.db unreadable (%r) -- falling back to the mint formula "
+        print("the account database is unreadable (%r) -- falling back to the mint formula "
               "for Content IDs and to each record's own rookie flag" % (exc,))
     return cids, rookie
 
