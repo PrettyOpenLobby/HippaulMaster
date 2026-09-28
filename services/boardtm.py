@@ -52,8 +52,8 @@ NAME = "tm"
 TITLE = "Tetra Master - Rankings & Auction"
 #: the Discord bot's words for this board's feeds: /tmboard rankings | auction | live
 DISCORD_TITLE = "Tetra Master"
-#: the bot's status. TM's marker (tm-matches-live.json, the deploy gate's own
-#: input since 2026-08-22) counts LIVE MATCHES, not players -- saying "players
+#: the bot's status. TM's marker (`live:tm`, the deploy gate's own input since
+#: 2026-08-22) counts LIVE MATCHES, not players -- saying "players
 #: online" of it would be a lie, so it is named for what it is.
 PRESENCE_GAME = "tm"
 PRESENCE_ONE = "match in play"
@@ -61,9 +61,9 @@ PRESENCE_MANY = "matches in play"
 
 
 def presence_count(args=None):
-    """TM's marker (tm-matches-live.json) is only WRITTEN while a match is
+    """TM's marker (`live:tm`) is only WRITTEN while a match is
     running, so between matches it goes stale -- and a stale marker otherwise
-    reads as "unknown", which cleared the status entirely. For this file stale
+    reads as "unknown", which cleared the status entirely. For this marker stale
     means something definite: no match is live. So it is 0, not unknown."""
     import polgateway
     n = polgateway.read_count("tm")
@@ -94,8 +94,9 @@ ACTIVITY_MAX = 14
 
 EXHIBIT_SUFFIX = ".U_g_TM0_EXHIBITLIST.bin"
 BIDS_NAME = "auction-%d.bids.bin"
-#: tetramaster._live_matches_write's marker; trusted for pol-git-sync's grace
-MATCHES_MARKER = "tm-matches-live.json"
+#: the service tetramaster._live_matches_write publishes its marker under
+#: (the core's live_sessions.py, `live:tm`); trusted for pol-git-sync's grace
+MATCHES_MARKER = "tm"
 LIVE_GRACE_S = float(os.environ.get("POL_DEPLOY_MATCH_GRACE_S", "900") or 900)
 
 _SNAP = {"t": 0.0, "snap": None}
@@ -105,10 +106,6 @@ _NAMES_LOCK = threading.Lock()
 _RENDER = {}
 _RENDER_LOCK = threading.Lock()
 _WARNED = set()
-
-
-def data_dir():
-    return os.environ.get("POL_DATA_DIR", "/data")
 
 
 def resource_dir():
@@ -671,10 +668,12 @@ def matches_live(now=None):
     """Matches in progress: the marker's count while fresh, 0 once stale,
     None when there is no marker (the page then says nothing)."""
     try:
-        with open(os.path.join(data_dir(), MATCHES_MARKER), encoding="utf-8") as fh:
-            d = json.load(fh) or {}
+        import live_sessions
+        d = live_sessions.read_marker(MATCHES_MARKER)
+        if d is None:
+            return None
         stamp, count = float(d.get("stamp") or 0), int(d.get("count") or 0)
-    except (OSError, ValueError, TypeError, AttributeError):
+    except (ImportError, ValueError, TypeError, AttributeError):
         return None
     now = time.time() if now is None else now
     return count if 0 <= now - stamp < LIVE_GRACE_S else 0

@@ -138,6 +138,8 @@ def setup(tmp):
     os.environ["POL_DATA_DIR"] = tmp
     os.environ["POL_TM_ROSTER_KEY"] = "tm:test:%s:roster" % os.path.basename(tmp)
     os.environ["POL_TM_WATCH_KEY"] = "tm:test:%s:tables-live" % os.path.basename(tmp)
+    # the live-match marker stays in this process's own store
+    os.environ.pop("POL_VALKEY_URL", None)
     # the PlayOnline portrait: handle_profile field 19 = z_ficon (sheet*8 + tile);
     # Elena's PRIMARY handle has hnf304 tile 7, her other one something else
     tmpg.pol_accounts({1: [("NotLex", True, None)],
@@ -213,8 +215,11 @@ def setup(tmp):
             fh.write(decoy)
     with open(os.path.join(res, "auction-pending-3.json"), "w") as fh:
         json.dump({"money": 400, "cards": [], "won": [], "refund": 0}, fh)
-    with open(os.path.join(tmp, "tm-matches-live.json"), "w") as fh:
-        json.dump({"count": 2, "stamp": NOW - 30}, fh)
+    # the live-match marker, stamped 30 s before the suite's clock
+    import live_sessions
+    from polcore import kv
+    kv.set(live_sessions.marker_key("tm"),
+           json.dumps({"count": 2, "stamp": NOW - 30}))
     return res
 
 

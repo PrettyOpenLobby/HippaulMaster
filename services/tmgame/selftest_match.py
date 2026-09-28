@@ -1346,9 +1346,10 @@ def _selftest_accept_persist():
         if matchmaking._note_accept(chan, index, "acc0", seats):
             common._say("FAIL: the first accept must HOLD the board"); ok = False
         try:
-            with open(os.path.join(tmpdir, "tm-matches-live.json")) as f:
-                cnt = int(json.load(f).get("count") or 0)
-        except (OSError, ValueError):
+            import live_sessions
+            from . import webwatch
+            cnt = int(live_sessions.read_marker(webwatch.LIVE_SERVICE).get("count") or 0)
+        except (ImportError, AttributeError, ValueError):
             cnt = -1
         if cnt < 1:
             common._say("FAIL: a pending accept must count as a live match for the "

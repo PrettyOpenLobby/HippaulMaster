@@ -38,6 +38,8 @@ def setup(tmp):
     os.environ["POL_RESOURCE_DIR"] = res
     os.environ["POL_DATA_DIR"] = tmp
     os.environ["POL_TM_ROSTER_KEY"] = "tm:test:%s:roster" % os.path.basename(tmp)
+    # the live-match marker stays in this process's own store
+    os.environ.pop("POL_VALKEY_URL", None)
     import tmauction
     import tmrank
     now = int(time.time())
@@ -75,8 +77,9 @@ def setup(tmp):
         fh.write(tmauction.build_bid("Quinn", 250, now - 2000, 12))
     with open(os.path.join(res, "11.U_g_TM0_EXHIBITLIST.bin"), "wb") as fh:
         fh.write(b"".join(recs))
-    with open(os.path.join(tmp, "tm-matches-live.json"), "w") as fh:
-        json.dump({"count": 2, "stamp": time.time()}, fh)
+    import boardtm
+    import live_sessions
+    live_sessions.write_marker(boardtm.MATCHES_MARKER, 2)
 
 
 def main(argv=None):

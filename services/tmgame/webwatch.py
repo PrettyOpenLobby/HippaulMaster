@@ -13,8 +13,14 @@ from . import (
 )
 
 
+#: The service name TM's live-match marker is published under: the core's
+#: live_sessions.py keeps it as `live:tm` in Valkey (it was the file
+#: `<POL_DATA_DIR>/tm-matches-live.json`).
+LIVE_SERVICE = "tm"
+
+
 def _live_matches_write():
-    """`<POL_DATA_DIR>/tm-matches-live.json` -- the DEPLOY GATE's input.
+    """The live-match marker `live:tm` -- the DEPLOY GATE's input.
 
     Deploy restarts wiped four live games' state in one afternoon
     (2026-08-22: a wedged board, two eaten stakes, a hung rematch vote).
@@ -33,8 +39,7 @@ def _live_matches_write():
     if not common._env_int("POL_TM_LIVE_MARKER", 1):
         return
     try:
-        path = os.path.join(os.environ.get("POL_DATA_DIR", "/data"),
-                            "tm-matches-live.json")
+        import live_sessions
         # WARNING: THE WINDOW IS THE WHOLE MATCH, NOT JUST THE DEALT PART. This
         # counted `_MATCH_TURN`, which is not created until THE DEAL
         # (`@CardSelect=` from the last player) -- so a match sitting in CARD
@@ -84,16 +89,10 @@ def _live_matches_write():
                  for k in shopdoors._CHECKOUT_PULL}
         keys |= {("eventshop",) + (k if isinstance(k, tuple) else (k,))
                  for k in shopdoors._EVENTSHOP_PENDING}
-        blob = json.dumps({"count": len(keys),
-                           "stamp": time.time()})
-        # Per-writer tmp name: every handler thread used to share `path +
-        # ".tmp"`, so two concurrent writers could interleave into one file
-        # and os.replace() could publish corrupt JSON -- which the external
-        # checkers may read as "0 live" (the unsafe direction).
-        tmp = "%s.tmp.%d.%d" % (path, os.getpid(), threading.get_ident())
-        with open(tmp, "w") as f:
-            f.write(blob)
-        os.replace(tmp, path)
+        # One SET of {count, stamp}: a reader never sees half a record (the
+        # file this was could be torn by two handler threads writing at once,
+        # and a torn marker may read as "0 live", the unsafe direction).
+        live_sessions.write_marker(LIVE_SERVICE, len(keys))
     except Exception as e:
         # Best-effort by design -- but a PERMANENTLY failing write (perms,
         # disk full) used to disable the deploy gate with no symptom at all.
