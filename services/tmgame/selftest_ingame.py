@@ -1,4 +1,5 @@
 """Selftest: the code-0x43 in-match family, end to end."""
+import uuid
 import inspect
 import json
 import os
@@ -28,7 +29,7 @@ def _selftest_ingame():
     """
     import os as _os, tempfile, tmroom
     ok = True
-    saved = (tmroom._FILE, tmroom._OWNER[0],
+    saved = (tmroom._KEY, tmroom._OWNER[0],
              dict(tmroom._TABLES), dict(tmroom._PEERS),
              dict(tmroom._RECORDS), dict(tmroom._ROOMS_SEQ))
     saved_seated, saved_pushes = dict(seating._SEATED), dict(pushqueue._PUSHES)
@@ -38,7 +39,7 @@ def _selftest_ingame():
     saved_hands, saved_turn = dict(boardrules._MATCH_HANDS), dict(boardrules._MATCH_TURN)
     saved_board, saved_rand = dict(boardrules._MATCH_BOARD), dict(matchstart._TURN_RAND)
     try:
-        tmroom._FILE = _os.path.join(tempfile.mkdtemp(prefix="tm-game-"), "r.json")
+        tmroom._KEY = "tm:selftest:tm-game:" + uuid.uuid4().hex
         tmroom._OWNER[0] = True
         for d in (tmroom._TABLES, tmroom._PEERS, tmroom._RECORDS,
                   tmroom._ROOMS_SEQ, seating._SEATED, pushqueue._PUSHES, matchmaking._MATCH_ROSTER,
@@ -3267,7 +3268,7 @@ def _selftest_ingame():
         common._say("FAIL: in-game selftest raised %r -- %s" % (exc, _tb.format_exc()))
         ok = False
     finally:
-        (tmroom._FILE, tmroom._OWNER[0]) = saved[0], saved[1]
+        (tmroom._KEY, tmroom._OWNER[0]) = saved[0], saved[1]
         for d, v in ((tmroom._TABLES, saved[2]), (tmroom._PEERS, saved[3]),
                      (tmroom._RECORDS, saved[4]), (tmroom._ROOMS_SEQ, saved[5]),
                      (seating._SEATED, saved_seated), (pushqueue._PUSHES, saved_pushes),
@@ -3278,5 +3279,5 @@ def _selftest_ingame():
                      (boardrules._MATCH_BOARD, saved_board), (matchstart._TURN_RAND, saved_rand)):
             d.clear(); d.update(v)
         seating._TABLE_CONFIRMED.clear(); tmroom._CONFIRMED.clear(); seating._TABLE_CONFIRMED.update(saved_conf)
-        tmroom._CACHE["mtime"] = -1.0
+        tmroom._SHARED.forget()
     return ok

@@ -7,7 +7,7 @@ the public TM board (services/boardtm.py), for a phone client:
 
     python tools/tm_faces_test.py
 
-Pins, against a temporary accounts.db and tm-roster.json: a POL-ID (tmroom's
+Pins, against a temporary accounts.db and room roster: a POL-ID (tmroom's
 published `polids`) and a name (the TM roster's, then a handle's, either case)
 reach the member's PRIMARY handle's field 19; unknown is 0 / 404; bad input is
 a 400 (hex length, printable ASCII <= 15, one kind, <= 50 keys); a quote in a
@@ -58,7 +58,7 @@ def setup(tmp):
     os.environ["POL_DATA_DIR"] = tmp
     os.environ["POL_RESOURCE_DIR"] = os.path.join(tmp, "resources")
     os.makedirs(os.environ["POL_RESOURCE_DIR"])
-    os.environ["POL_TM_ROSTER_FILE"] = os.path.join(tmp, "tm-roster.json")
+    os.environ["POL_TM_ROSTER_KEY"] = "tm:test:%s:roster" % os.path.basename(tmp)
     db = os.path.join(tmp, "accounts.db")
     os.environ["POL_ACCOUNTS_DB"] = db
     c = sqlite3.connect(db)
@@ -74,10 +74,11 @@ def setup(tmp):
                   [(1, 19, 2439), (2, 19, 16), (1, 5, 77), (4, 19, 16)])
     c.commit()
     c.close()
-    with open(os.environ["POL_TM_ROSTER_FILE"], "w", encoding="utf-8") as fh:
-        # tmroom stores POL-IDs as the client's own 16 upper-case hex digits
-        json.dump({"names": {"1": "Lex", "3": "Elena"},
-                   "polids": {"3": ELENA, "1": LEX, "9": "garbage"}}, fh)
+    import tmstore
+    # tmroom stores POL-IDs as the client's own 16 upper-case hex digits
+    tmstore.Snapshot(tmstore.roster_key()).write(
+        {"names": {"1": "Lex", "3": "Elena"},
+         "polids": {"3": ELENA, "1": LEX, "9": "garbage"}})
     return db
 
 

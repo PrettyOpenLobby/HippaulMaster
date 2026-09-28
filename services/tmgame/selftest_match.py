@@ -8,6 +8,7 @@ import tempfile
 import tmbattle
 import struct
 import time
+import tmstore
 from .deps import tmsave
 from . import (
     boardrules, cardtables, careerstats, collection, common, dispatch, matchmaking, matchstart,
@@ -1312,16 +1313,16 @@ def _selftest_locked():
         import tmroom
     except Exception:
         return selftest_run._selftest_all()                 # no roster module, no hazard
-    saved = (tmroom._FILE, tmroom._OWNER[0],
+    saved = (tmroom._KEY, tmroom._OWNER[0],
              json.loads(json.dumps(tmroom._RULES)))
     tmpdir = tempfile.mkdtemp(prefix="tm-selftest-")
     try:
-        tmroom._FILE = os.path.join(tmpdir, "tm-roster.json")
+        tmroom._KEY = "tm:selftest:%s:roster" % os.path.basename(tmpdir)
         return selftest_run._selftest_all()
     finally:
-        tmroom._FILE, tmroom._OWNER[0] = saved[0], saved[1]
+        tmroom._KEY, tmroom._OWNER[0] = saved[0], saved[1]
         tmroom._RULES.clear(); tmroom._RULES.update(saved[2])
-        tmroom._CACHE["mtime"] = -1.0
+        tmroom._SHARED.forget()
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
@@ -1334,11 +1335,13 @@ def _selftest_accept_persist():
     ok = True
     tmpdir = tempfile.mkdtemp(prefix="tm-accepts-")
     saved_env = os.environ.get("POL_DATA_DIR")
+    saved_key = os.environ.get("POL_TM_ACCEPTS_KEY")
     saved = dict(matchmaking._MATCH_ACCEPTS)
     chan, index = "#TMACCTEST", 3
     seats = [("acc0", 0), ("acc1", 1)]
     try:
         os.environ["POL_DATA_DIR"] = tmpdir
+        os.environ["POL_TM_ACCEPTS_KEY"] = "tm:selftest:%s:accepts" % os.path.basename(tmpdir)
         matchmaking._MATCH_ACCEPTS.clear()
         if matchmaking._note_accept(chan, index, "acc0", seats):
             common._say("FAIL: the first accept must HOLD the board"); ok = False
@@ -1379,10 +1382,12 @@ def _selftest_accept_persist():
             ok = False
     finally:
         matchmaking._MATCH_ACCEPTS.clear(); matchmaking._MATCH_ACCEPTS.update(saved)
-        if saved_env is None:
-            os.environ.pop("POL_DATA_DIR", None)
-        else:
-            os.environ["POL_DATA_DIR"] = saved_env
+        tmstore.kv.delete(matchmaking._accepts_path())
+        for name, value in (("POL_DATA_DIR", saved_env), ("POL_TM_ACCEPTS_KEY", saved_key)):
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
         shutil.rmtree(tmpdir, ignore_errors=True)
     if ok:
         common._say("selftest: accept quorum persists across a restart")

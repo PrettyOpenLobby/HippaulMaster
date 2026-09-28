@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tm_watch_test.py -- the Tetra Master web watch file (tetramaster.py's
+"""tm_watch_test.py -- the Tetra Master web watch document (tetramaster.py's
 `_watch_*`, 2026-09-13), end to end through the REAL placement resolver.
 
     python tools/tm_watch_test.py
@@ -7,11 +7,15 @@
 Pins the server owner's choices: only tables whose creator allows observing
 (`@Tab=/in=` 0 or 2; 1 "Impossible" and password tables are listed without
 state), HANDS HIDDEN (counts only -- no unplayed card appears anywhere in the
-file), VS. COM games included; and the shape the board animates: one step per
+document), VS. COM games included; and the shape the board animates: one step per
 placement with its battles (rolls), the tiles that changed hands (battle /
 combo / flip) and a chance block's effect. And that it can never cost a match:
 a process holding no match never writes, a failed write raises nothing, and
-POL_TM_WATCH_FILE=0 writes nothing.
+POL_TM_WATCH_KEY=0 writes nothing.
+
+The document lives in polcore.kv (tmstore.watch_key); with POL_VALKEY_URL
+unset that is this process's in-memory store, which is all a single-process
+test needs.
 """
 import json
 import os
@@ -25,17 +29,22 @@ TMP = tempfile.mkdtemp(prefix="tmwatch-")
 os.makedirs(os.path.join(TMP, "resources"), exist_ok=True)
 os.environ["POL_DATA_DIR"] = TMP
 os.environ["POL_RESOURCE_DIR"] = os.path.join(TMP, "resources")
-os.environ["POL_TM_ROSTER_FILE"] = os.path.join(TMP, "tm-roster.json")
+os.environ["POL_TM_ROSTER_KEY"] = "tm:test:%s:roster" % os.path.basename(TMP)
+os.environ["POL_TM_WATCH_KEY"] = KEY = "tm:test:%s:tables-live" % os.path.basename(TMP)
 os.environ["POL_TM_LIVE_MARKER"] = "1"
-with open(os.environ["POL_TM_ROSTER_FILE"], "w") as fh:
-    json.dump({"names": {"101": "Lex", "102": "Corvin", "201": "Elena",
-                         "301": "Quinn", "302": "juno"}}, fh)
 sys.path.insert(0, os.path.join(HERE, os.pardir, "services"))
+sys.path.insert(0, HERE)
+import tm_testenv                                 # noqa: E402
+tm_testenv.setup(need_core=False)
+
+import tmstore                                    # noqa: E402
+tmstore.Snapshot(tmstore.roster_key()).write(
+    {"names": {"101": "Lex", "102": "Corvin", "201": "Elena",
+               "301": "Quinn", "302": "juno"}})
 
 import tetramaster as tm                          # noqa: E402
 
 CHECKS = []
-FILE = os.path.join(TMP, "tm-tables-live.json")
 
 
 def check(label, cond, detail=""):
@@ -51,9 +60,21 @@ def row(cid, atk, typ, pdef, mdef, arrows):
     return b"%d|%d|%d|%d|%d|0|%d|0" % (cid, atk, typ, pdef, mdef, arrows)
 
 
+def raw():
+    return tmstore.kv.get(KEY)
+
+
 def read():
-    with open(FILE, encoding="utf-8") as fh:
-        return json.load(fh)
+    return json.loads(raw())
+
+
+class _Broken:
+    """A live store that is down: every call raises."""
+
+    def __getattr__(self, name):
+        def fail(*a, **k):
+            raise ConnectionError("the live store is down")
+        return fail
 
 
 def reset():
@@ -70,8 +91,8 @@ def main():
     reset()
     tm._watch_touch()
     tm._watch_publish(force=True)
-    check("no match here (the login container's case): no file, not the writer",
-          not os.path.exists(FILE) and not tm._WATCH["owner"])
+    check("no match here (the login container's case): nothing written, not the writer",
+          raw() is None and not tm._WATCH["owner"])
 
     print("a player-vs-player match, through the real resolver")
     chan, idx = "#TM0R001", 3
@@ -87,7 +108,7 @@ def main():
     tm._MATCH_TURN[key] = {"turn": 0, "active": 0, "n": 2}
     tm._live_matches_write()
     check("the first match message makes this process the writer",
-          tm._WATCH["owner"] and os.path.exists(FILE))
+          tm._WATCH["owner"] and raw() is not None)
     t = read()["tables"]
     check("the table is listed by <room>-<table>, watchable, dealt, no moves yet",
           set(t) == {"1-3"} and t["1-3"]["watchable"]
@@ -124,8 +145,8 @@ def main():
           s["board"]["5"]["id"] == 10 and s["board"]["5"]["arrows"] == E
           and s["board"]["5"]["placer"] == 0 and s["board"]["5"]["atk"] == 60)
     check("scores are tiles held", sum(p["score"] for p in s["players"]) == 2)
-    blob = open(FILE, encoding="utf-8").read()
-    check("HANDS HIDDEN: a card still in a hand appears nowhere in the file",
+    blob = raw()
+    check("HANDS HIDDEN: a card still in a hand appears nowhere in the document",
           '"id":222' not in blob and "222|" not in blob
           and [p["hand"] for p in s["players"]] == [1, 1])
 
@@ -243,31 +264,38 @@ def main():
     tm._MATCH_TURN.pop(key, None)
     tm._MATCH_STARTED.pop(key, None)
     tm._watch_publish(force=True)
-    check("a table whose game has gone is gone from the file", "1-3" not in read()["tables"])
+    check("a table whose game has gone is gone from the document", "1-3" not in read()["tables"])
 
     print("cadence")
     stamp = read()["stamp"]
     tm._watch_publish()
     tm._watch_publish(force=True)
-    check("an unchanged file is not rewritten inside 5 s", read()["stamp"] == stamp)
+    check("an unchanged document is not rewritten inside 5 s", read()["stamp"] == stamp)
     tm._WATCH["t"] = time.time() - tm.WATCH_EVERY_S - 1
+    time.sleep(0.05)            # past the clock's tick: the in-memory store is instant
     tm._watch_publish()
     check("...and is rewritten every 5 s (the heartbeat the board trusts)",
           read()["stamp"] > stamp)
 
     print("it can never cost a match")
-    os.environ["POL_TM_WATCH_FILE"] = os.path.join(TMP, "no", "such", "dir", "x.json")
-    tm._WATCH.update(t=0.0, body=None)
-    tm._watch_publish(force=True)
-    tm._apply_placement("#TM0R001", 4, 2, 1, 2, row(32, 10, 0, 10, 10, 0), rnd=random.Random(6))
+    live = tmstore.kv.default()
+    tmstore.kv.reset(_Broken())
+    try:
+        tm._WATCH.update(t=0.0, body=None)
+        tm._watch_publish(force=True)
+        tm._apply_placement("#TM0R001", 4, 2, 1, 2, row(32, 10, 0, 10, 10, 0),
+                            rnd=random.Random(6))
+    finally:
+        tmstore.kv.reset(live)
     check("a write that fails raises nothing, and the placement still lands",
           2 in tm._MATCH_BOARD[key2])
-    os.environ["POL_TM_WATCH_FILE"] = "0"
-    before = os.path.getmtime(FILE)
+    os.environ["POL_TM_WATCH_KEY"] = "0"
+    before = raw()
     tm._WATCH.update(t=0.0, body=None)
+    time.sleep(0.01)
     tm._watch_publish(force=True)
-    check("POL_TM_WATCH_FILE=0 writes nothing", os.path.getmtime(FILE) == before)
-    del os.environ["POL_TM_WATCH_FILE"]
+    check("POL_TM_WATCH_KEY=0 writes nothing", raw() == before)
+    os.environ["POL_TM_WATCH_KEY"] = KEY
     print("[tm_watch_test] OK -- %d checks" % len(CHECKS))
 
 

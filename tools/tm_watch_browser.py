@@ -25,14 +25,16 @@ TMP = tempfile.mkdtemp(prefix="tm-watch-browser-")
 os.makedirs(os.path.join(TMP, "resources"), exist_ok=True)
 os.environ["POL_DATA_DIR"] = TMP
 os.environ["POL_RESOURCE_DIR"] = os.path.join(TMP, "resources")
-os.environ["POL_TM_ROSTER_FILE"] = os.path.join(TMP, "tm-roster.json")
+os.environ["POL_TM_ROSTER_KEY"] = "tm:test:%s:roster" % os.path.basename(TMP)
+os.environ["POL_TM_WATCH_KEY"] = "tm:test:%s:tables-live" % os.path.basename(TMP)
 os.environ["POL_ACCOUNTS_DB"] = os.path.join(TMP, "none.db")
-with open(os.environ["POL_TM_ROSTER_FILE"], "w") as fh:
-    json.dump({"names": {"101": "Lex", "102": "Corvin", "201": "periwinks"}}, fh)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, os.pardir, "services"))
 
 from fe_panel_browser import Browser, free_port   # noqa: E402
+import tmstore                                    # noqa: E402
+tmstore.Snapshot(tmstore.roster_key()).write(
+    {"names": {"101": "Lex", "102": "Corvin", "201": "periwinks"}})
 import tetramaster as tm                          # noqa: E402
 import tm_cardprm                                 # noqa: E402
 
@@ -129,7 +131,7 @@ def main(argv=None):
         tm._apply_placement(chan, idx, 2, 1, 6, row(100, 80, W), rnd=random.Random(7))
         tm._MATCH_TURN[(chan, idx)].update(turn=2, active=0)
         tm._watch_publish(force=True)
-        st = json.load(open(os.path.join(TMP, "tm-tables-live.json")))["tables"]["1-3"]["state"]
+        st = tmstore.kv.get_json(tmstore.watch_key())["tables"]["1-3"]["state"]
         battle = st["steps"][-1]["battles"][0]
         b.pump(1.9)
         b.screenshot(os.path.join(o.shots, "2-battle.png"))
@@ -223,11 +225,8 @@ def main(argv=None):
         b.screenshot(os.path.join(o.shots, "9-phone.png"))
         # --- hand-made states for what a quick test game will not reliably deal
         b.call("Emulation.clearDeviceMetricsOverride")
-        live = os.path.join(TMP, "tm-tables-live.json")
-
         def put(tables):
-            with open(live, "w") as fh:
-                json.dump({"stamp": time.time(), "tables": tables}, fh)
+            tmstore.kv.set_json(tmstore.watch_key(), {"stamp": time.time(), "tables": tables})
             time.sleep(0.6)                              # past boardtm's half-second cache
 
         def card(cid, owner, arrows=0, **kw):

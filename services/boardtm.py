@@ -46,6 +46,7 @@ import time
 import tm_cardprm
 import tmauction
 import tmrank
+import tmstore
 
 NAME = "tm"
 TITLE = "Tetra Master - Rankings & Auction"
@@ -131,14 +132,17 @@ def _warn(key, text):
 # ---------------------------------------------------------------------------
 # names: the roster TM itself draws, then the accounts DB, read-only
 # ---------------------------------------------------------------------------
+_ROSTER = tmstore.Snapshot(tmstore.roster_key())
+
+
 def _roster_section(key):
-    """One map out of tmroom's published tm-roster.json, or {}."""
-    path = os.environ.get("POL_TM_ROSTER_FILE") or os.path.join(data_dir(), "tm-roster.json")
+    """One map out of the room roster tmroom publishes (tmstore.roster_key),
+    or {}."""
+    _ROSTER.key = tmstore.roster_key()
     try:
-        with open(path, encoding="utf-8") as fh:
-            d = json.load(fh) or {}
+        d = _ROSTER.read() or {}
         return {str(k): str(v) for k, v in (d.get(key) or {}).items() if v}
-    except (OSError, ValueError, AttributeError):
+    except (ValueError, AttributeError):
         return {}
 
 
@@ -374,14 +378,14 @@ def in_band(row, band):
 
 
 # ---------------------------------------------------------------------------
-# WATCHING (2026-09-13): the matches tetramaster.py publishes to
-# <POL_DATA_DIR>/tm-tables-live.json. IT decides who may be seen -- the table
+# WATCHING (2026-09-13): the matches tetramaster.py publishes under
+# tmstore.watch_key() (Valkey `tm:tables-live`; once the file
+# <POL_DATA_DIR>/tm-tables-live.json). IT decides who may be seen -- the table
 # creator's own observe setting; an unwatchable table comes with no state --
-# and hands are counts only, so the view is LIVE: nothing in the file is worth
+# and hands are counts only, so the view is LIVE: nothing in the document is worth
 # relaying to a player. /watch#<room>-<table> animates each move with the
 # game's own pieces; /watch alone lists the matches.
 # ---------------------------------------------------------------------------
-TABLES_FILE = "tm-tables-live.json"
 #: the writer beats every 5 s while it holds a match; this long without a beat
 #: and it is gone (authsess restarted), so nothing is shown
 WATCH_STALE_S = 60.0
@@ -390,21 +394,25 @@ _TABLES_LOCK = threading.Lock()
 
 
 def live_tables(now=None):
-    """{table id: state} of every watchable match right now; {} when the file
-    is missing, unreadable or stale. Cached half a second."""
+    """{table id: state} of every watchable match right now; {} when the
+    document is missing, unreadable or stale. Cached half a second."""
     now = time.time() if now is None else now
     with _TABLES_LOCK:
         if 0 <= now - _TABLES["t"] < 0.5:
             return _TABLES["d"]
     out = {}
     try:
-        with open(os.path.join(data_dir(), TABLES_FILE), encoding="utf-8") as fh:
-            d = json.load(fh) or {}
+        key = tmstore.watch_key()
+        raw = tmstore.kv.get(key) if key else None
+        d = json.loads(raw) if raw else {}
         if 0 <= now - float(d.get("stamp") or 0) < WATCH_STALE_S:
             for tid, e in (d.get("tables") or {}).items():
                 if isinstance(e, dict) and e.get("watchable") and isinstance(e.get("state"), dict):
                     out[str(tid)] = e["state"]
     except (OSError, ValueError, TypeError, AttributeError):
+        out = {}
+    except Exception as exc:                     # noqa: BLE001 -- Valkey away
+        _warn("watch-kv", "the watch document could not be read (%r)" % (exc,))
         out = {}
     watch_enrich(out)
     with _TABLES_LOCK:

@@ -37,7 +37,7 @@ def setup(tmp):
     os.makedirs(res)
     os.environ["POL_RESOURCE_DIR"] = res
     os.environ["POL_DATA_DIR"] = tmp
-    os.environ["POL_TM_ROSTER_FILE"] = os.path.join(tmp, "tm-roster.json")
+    os.environ["POL_TM_ROSTER_KEY"] = "tm:test:%s:roster" % os.path.basename(tmp)
     os.environ["POL_ACCOUNTS_DB"] = os.path.join(tmp, "none.db")
     import tmauction
     import tmrank
@@ -55,8 +55,9 @@ def setup(tmp):
             json.dump({"rank": {"games": 3 + i, "score_total": 40 - 2 * i, "tiles_total": 50,
                                 "prize_week": 100 * i, "last_played": now - 60,
                                 "week_of": tmrank.week_start(now), "week_games": 1 + i % 4}}, fh)
-    with open(os.environ["POL_TM_ROSTER_FILE"], "w") as fh:
-        json.dump({"names": {str(i + 1): n for i, n in enumerate(NAMES)}}, fh)
+    import tmstore
+    tmstore.Snapshot(tmstore.roster_key()).write(
+        {"names": {str(i + 1): n for i, n in enumerate(NAMES)}})
     recs = []
     for k, (cid, atk, pdef, typ, mdef, arrows) in enumerate(CARDS):
         cm = 900 + 300 * k if k % 2 else 0
