@@ -1804,7 +1804,8 @@ TABLE_ID_MIN = 0x10000          #: below this, an id is small enough to collide
 #: A MEMBER id always does: the CLIENT minted it (`@Init=/NN=`), so it is `K ^
 #: something small` by construction. A TABLE id is ours, and the old
 #: `0x0021<room>` high half is NOT in that coset -- so the client reconstructs
-#: `0xAB12CD01_00001001` for a table we published as `0x00210001_00001001`.
+#: an id with K's top 24 bits over `01_00001001` for a table we published as
+#: `0x00210001_00001001`.
 #: `TM.dll 0x86ED0` compares the two 32-bit halves SEPARATELY: the low half
 #: matches, the high half does not, `record+0x30` never reaches 2, and "Change
 #: Table Settings" sits on "Retrieving table info..." until it times out. That
@@ -1821,18 +1822,46 @@ TABLE_ID_MIN = 0x10000          #: below this, an id is small enough to collide
 #: DERIVATION (no debugger, nothing guessed): the client tells us its own app id
 #: in `@Init=/NN=`, and its login NICK folds to that id's wire form, so
 #:     K = tm_self_id ^ base36(polid_for_nick(nick))
-#: The default below was derived that way from TWO different clients in the same
-#: capture (`AB12CD31DC3F63B6`/`UF8TOQDTX` and
-#: `AB12CD56EB0F5932`/`UA4XX8PKP`) and they agree to the bit; it also
+#: The value was derived that way from TWO different clients in the same
+#: capture (login nicks `UF8TOQDTX` and `UA4XX8PKP`) and they agree to the
+#: bit; it also
 #: reproduces every peer nick ever measured -- the room peer `UKXDBA266`
 #: (0xF0E4BCBB91), table 1 `UE5BRFVCJ` (0xD1E4BCAB91) and table 2 `UE5BRFYDE`
 #: (0xD1E4BC9B92). `tetramaster`'s `/Shm=` banner recorded this same value as
 #: "ONE OPEN VARIABLE" on 2026-08-16 and never connected it to the table id.
 #:
-#: WARNING: IT IS A DEFAULT, NOT AN ASSUMPTION. `learn_client_key` re-derives it from
-#: any live (self id, POL ID) pair and says so; a disagreement is LOGGED, not
-#: swallowed, because a `K` that is really per-install would show up here first.
-CLIENT_KEY_DEFAULT = 0xAB12CDD0E4BCBB90
+#: K IS A FUNCTION OF THE GAME CODE. Project Crystal Server's `Mg.cs` computes
+#: it from the three ASCII bytes of "TM0" alone, and that formula (the core's
+#: `mgkey.py`) lands on the measured value bit for bit, so K is one constant
+#: per title, the same for every install, client and session. The key is taken
+#: from `mgkey` when the core is on the path and from the same arithmetic in
+#: `_client_key_for_code` when it is not; the import-time check below keeps
+#: the two from drifting apart. `learn_client_key` still re-derives K from any
+#: live (self id, POL ID) pair and LOGS a disagreement, which would now mean a
+#: client build whose formula differs.
+
+
+def _client_key_for_code(code):
+    """The 64-bit id key for a three-letter game code, with the arithmetic
+    of the core's `mgkey.minigame_client_key`, so a tree without the core
+    computes the same key: the code's ASCII bytes read little-endian, squared
+    mod 2**32, times one multiplier for each half."""
+    c = int.from_bytes(code.encode("ascii")[:4], "little")
+    sq = (c * c) & 0xFFFFFFFF
+    lo = (sq * 19701121) & 0xFFFFFFFF
+    hi = (sq * 0x012CC4F5) & 0xFFFFFFFF
+    return (hi << 32) | lo
+
+
+try:
+    import mgkey as _mgkey
+except ImportError:          # a tree without the core's mgkey.py
+    _mgkey = None
+CLIENT_KEY_DEFAULT = _client_key_for_code("TM0")
+if _mgkey is not None and _mgkey.minigame_client_key("TM0") != CLIENT_KEY_DEFAULT:
+    raise RuntimeError("tmroom: _client_key_for_code('TM0') 0x%016X != "
+                       "mgkey('TM0') 0x%016X"
+                       % (CLIENT_KEY_DEFAULT, _mgkey.minigame_client_key("TM0")))
 #: The nick carries 8 base-36 digits; 40 bits always fit (2**40 < 36**8).
 CLIENT_ID_BITS = 40
 _CLIENT_KEY_LEARNED = None
@@ -1881,7 +1910,8 @@ def learn_client_key(self_id, polid_fold):
     POL ID -- i.e. `tetramaster.peer_guid(their login nick)`.
 
     Three outcomes, all logged: AGREES with what we are using, DISAGREES (loud
-    -- the compiled default would then be wrong for this install), or the first
+    -- K is a per-title constant (`mgkey`), so this would mean a client build
+    whose formula differs, or a bad pair), or the first
     value we have ever had. Returns the key in use afterwards.
     """
     global _CLIENT_KEY_LEARNED, _CLIENT_KEY_SOURCE
@@ -1940,8 +1970,9 @@ def canonical_table_id(index, room_no=0):
     that carries an id on the wire holds only the LOW 40 BITS of `id ^ K`, so a
     published id whose top 24 bits are not `K`'s comes back to the client as a
     DIFFERENT id. `0x00210000|room` is not in that coset, so `TM.dll 0x86ED0`
-    compared `0xAB12CD01_00001001` (reconstructed) against `0x00210001_00001001`
-    (published), missed on the high half, and never set `record+0x30 = 2`.
+    compared the reconstructed id (K's top 24 bits over `01_00001001`) against
+    `0x00210001_00001001` (published), missed on the high half, and never set
+    `record+0x30 = 2`.
     The high half is therefore `K_hi ^ room_no`, which makes `id ^ K` exactly
     `(room_no << 32) | (low ^ K_lo)` -- under 2**40 for any room < 256, so it
     round-trips to the bit.
@@ -2809,12 +2840,20 @@ def _selftest_client_key():
             fails.append(msg)
 
     # MEASURED: two different clients in one capture must yield the SAME key.
-    pairs = [(0xAB12CD31DC3F63B6, 0x00E13883D826),      # client A / UF8TOQDTX
-             (0xAB12CD56EB0F5932, 0x00860FB3E2A2)]      # client B / UA4XX8PKP
+    # Each pair is the low 40 bits of a client's own app id (`@Init=/NN=`) and
+    # the base-36 fold of its login nick; an app id's top 24 bits are K's own
+    # (see `round_trips`), so the low 40 carry the whole comparison.
+    low40 = (1 << CLIENT_ID_BITS) - 1
+    pairs = [(0x31DC3F63B6, 0x00E13883D826),      # client A / UF8TOQDTX
+             (0x56EB0F5932, 0x00860FB3E2A2)]      # client B / UA4XX8PKP
     keys = {sid ^ fold for sid, fold in pairs}
-    want(keys == {CLIENT_KEY_DEFAULT},
-         "the two measured (self id, nick fold) pairs must both give "
-         "CLIENT_KEY_DEFAULT, got %s" % sorted(hex(k) for k in keys))
+    want(keys == {CLIENT_KEY_DEFAULT & low40},
+         "the two measured (self id, nick fold) pairs must both give the low "
+         "40 bits of CLIENT_KEY_DEFAULT, got %s" % sorted(hex(k) for k in keys))
+    # ...and the game-code formula (mgkey, after Crystal's Mg.cs) lands on it.
+    if _mgkey is not None:
+        want(_mgkey.minigame_client_key("TM0") == CLIENT_KEY_DEFAULT,
+             "mgkey.minigame_client_key('TM0') must equal CLIENT_KEY_DEFAULT")
 
     # MEASURED: that key reproduces every peer guid ever captured.
     for guid, app, what in (
@@ -2829,10 +2868,11 @@ def _selftest_client_key():
     want(not round_trips(0x0021000100001001, CLIENT_KEY_DEFAULT),
          "the legacy table id must be RECOGNISED as un-round-trippable, or the "
          "heal never fires")
+    k_top = (CLIENT_KEY_DEFAULT >> CLIENT_ID_BITS) << CLIENT_ID_BITS
     want(app_id_for_guid(0x00D1E4BCAB91, CLIENT_KEY_DEFAULT)
-         == 0xAB12CD0100001001,
-         "the legacy id must reconstruct as 0xAB12CD0100001001 -- the measured "
-         "high-half mismatch TM.dll 0x86ED0 rejects")
+         == k_top | 0x0100001001,
+         "the legacy id must reconstruct with K's top 24 bits over "
+         "0x0100001001 -- the measured high-half mismatch TM.dll 0x86ED0 rejects")
 
     if os.environ.get("POL_TM_TABLE_ID_KEYFOLD", "1") == "1":
         # THE FIX: every authored table id in every room survives the wire.
