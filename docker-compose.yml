@@ -30,7 +30,7 @@ services:
     build:
       context: ../crystalmaster
       args:
-        OPENLOBBY_IMAGE: openlobby:latest
+        OPENLOBBY_IMAGE: "${OPENLOBBY_IMAGE:-openlobby:latest}"
     pull_policy: build
     environment:
       POL_TITLES: tmtitle
