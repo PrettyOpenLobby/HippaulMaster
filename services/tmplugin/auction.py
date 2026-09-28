@@ -310,7 +310,7 @@ def _auction_notice(recipient_member, which, card="", amount=None):
                         f"{recipient_member!r} is not a member id -- skipped")
         return
     try:
-        db = corenames.accounts.connect(os.environ.get("POL_ACCOUNTS_DB", corenames.accounts.DEFAULT_DB))
+        db = corenames.accounts.connect()
         try:
             hid = corenames._member_primary_handle(db, member)
         finally:

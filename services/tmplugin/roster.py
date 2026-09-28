@@ -294,12 +294,12 @@ def _roster_note_guid(member_id):
     except Exception as exc:
         corenames.log("authserv", f"  roster: cannot name member {member_id} ({exc!r})")
     try:
-        db = corenames.accounts.connect(os.environ.get("POL_ACCOUNTS_DB", corenames.accounts.DEFAULT_DB))
+        db = corenames.accounts.connect()
         try:
             hid = corenames._session_handle_id(db)
             if not hid:
                 return
-            row = db.execute("SELECT client_guid FROM handle WHERE id = ?",
+            row = db.execute("SELECT client_guid FROM handle WHERE id = %s",
                              (int(hid),)).fetchone()
             g = int((row["client_guid"] or 0)) if row is not None else 0
             if g and tmroom.note_guid(member_id, g):
