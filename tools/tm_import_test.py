@@ -128,8 +128,13 @@ def old_files(base):
         sys.exit(1)
     code = os.path.join(base, "old")
     os.makedirs(code)
+    # git archive reads its paths relative to the working directory, so it runs
+    # at the top of the work tree: a checkout that holds this repository as a
+    # subfolder (a git subtree) has no services/ of its own at OLD_COMMIT's root.
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=ROOT,
+                         capture_output=True, text=True, check=True).stdout.strip()
     tar = subprocess.run(["git", "archive", "--format=tar", OLD_COMMIT, "services", "tools"],
-                         cwd=ROOT, capture_output=True, check=True).stdout
+                         cwd=top, capture_output=True, check=True).stdout
     with tarfile.open(fileobj=io.BytesIO(tar)) as tf:
         tf.extractall(code)
     with open(os.path.join(base, "fixture.py"), "w", encoding="utf-8") as fh:
