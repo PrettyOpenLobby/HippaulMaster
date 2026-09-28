@@ -4994,6 +4994,18 @@ class TetraMaster(titles.Title):
     def character_name(self, cid):
         return _pool_character_name(cid)
 
+    def character_display_name(self, cid, content_id, handle_name):
+        """The name in the character list (1:3, +0x18): the character pool's
+        name, else the handle name, else the Content ID's digits. NEVER empty:
+        this string is the VS. COM seat banner. POL_CHAR_NAME_HANDLE=0 drops
+        the handle-name step."""
+        pooled = _pool_character_name(cid)
+        if pooled:
+            return pooled
+        if handle_name and os.environ.get("POL_CHAR_NAME_HANDLE", "1") == "1":
+            return handle_name
+        return content_id
+
     def character(self, cid):
         return _pool_character(cid)
 
