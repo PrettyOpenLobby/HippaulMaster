@@ -24,22 +24,22 @@ services/boardart/tm/board.json), with every word set as real text.
 THINGS THIS MODULE MUST NEVER DO -- each is what the obvious call does:
 
   * run tools/tmrank.py, even --dry-run. --publish rewrites every collection
-    file and grants prizes; _from_db opens accounts.db for writing.
+    file and grants prizes; _from_db reads every member's Content ID.
   * settle the auction. responders._tm_auction_reply runs _auction_sweep(),
     which credits money, sends POL messages and relists; settlement is lazy on
     purpose. Nothing here imports responders -- the count rule it needs
     (drop listings that are expired AND have bids) is re-implemented below.
   * read *.U_g_TM0_AUCLIST.bin / *.U_g_TM0_BIDLIST.bin: per-request staged
     copies, not the store.
-  * open accounts.db through accounts.connect() (a write lock). Names come
-    from the TM roster's own JSON, then a read-only SQLite URI.
+  * write to the account database. Names come from the TM roster's own
+    JSON, then from OpenLobby's accounts functions (accounts.connect(), the
+    stack's PostgreSQL), which this module only ever reads through.
 """
 import glob
 import hashlib
 import io
 import json
 import os
-import sqlite3
 import threading
 import time
 
@@ -118,9 +118,13 @@ def resource_dir():
     return os.path.dirname(tmrank.store_dir())
 
 
-def accounts_path():
-    """POL_ACCOUNTS_DB, else /data/accounts.db (prod's login/authsess env)."""
-    return os.environ.get("POL_ACCOUNTS_DB", "/data/accounts.db")
+def _accounts_conn():
+    """(accounts module, a connection) to the stack's account database
+    (POL_DATABASE_URL). Raises when OpenLobby's accounts module is not on the
+    path or the database cannot be reached; every caller catches that and
+    serves the board without names."""
+    import accounts
+    return accounts, accounts.connect()
 
 
 def _warn(key, text):
@@ -130,7 +134,7 @@ def _warn(key, text):
 
 
 # ---------------------------------------------------------------------------
-# names: the roster TM itself draws, then the accounts DB, read-only
+# names: the roster TM itself draws, then the account database, read only
 # ---------------------------------------------------------------------------
 _ROSTER = tmstore.Snapshot(tmstore.roster_key())
 
@@ -151,8 +155,8 @@ def roster_names():
 
 
 def member_names(members, ttl=60.0):
-    """{member id (str): name} -- the roster's name, else the primary handle
-    through a read-only URI (never accounts.connect()), cached `ttl` s."""
+    """{member id (str): name} -- the roster's name, else the member's
+    primary handle (accounts.primary_handle), cached `ttl` s."""
     members = [str(m) for m in members]
     now = time.time()
     with _NAMES_LOCK:
@@ -162,18 +166,16 @@ def member_names(members, ttl=60.0):
     want = [m for m in members if not out.get(m) and m.isdigit()]
     if want:
         try:
-            conn = sqlite3.connect("file:%s?mode=ro" % accounts_path(), uri=True, timeout=5)
+            acc, conn = _accounts_conn()
             try:
                 for m in want:
-                    row = conn.execute(
-                        "SELECT handle_name FROM handle WHERE member_id = ?"
-                        " ORDER BY is_primary DESC, id ASC LIMIT 1", (int(m),)).fetchone()
-                    if row and row[0]:
-                        out[m] = str(row[0])
+                    name = acc.primary_handle(conn, int(m))
+                    if name:
+                        out[m] = str(name)
             finally:
                 conn.close()
-        except sqlite3.Error as e:
-            _warn("names", "cannot read names from %s (%s)" % (accounts_path(), e))
+        except Exception as e:                  # noqa: BLE001 -- names are optional
+            _warn("names", "cannot read names from the account database (%r)" % (e,))
     out = {m: out.get(m, "") for m in set(members) | set(out)}
     with _NAMES_LOCK:
         _NAMES.update(t=now, map=out)
@@ -430,7 +432,8 @@ _FACE_PNG = {}
 
 
 def face_ids(members, ttl=60.0):
-    """{member id: z_ficon} through a read-only URI, cached `ttl` s; 0 = none."""
+    """{member id: z_ficon} from the primary handle's profile, cached `ttl` s;
+    0 = none."""
     members = [int(m) for m in members if str(m).isdigit()]
     now = time.time()
     with _NAMES_LOCK:
@@ -440,18 +443,16 @@ def face_ids(members, ttl=60.0):
     if not want:
         return out
     try:
-        conn = sqlite3.connect("file:%s?mode=ro" % accounts_path(), uri=True, timeout=5)
+        acc, conn = _accounts_conn()
         try:
             for m in want:
-                row = conn.execute(
-                    "SELECT val_int FROM handle_profile WHERE field_id = ? AND handle_id ="
-                    " (SELECT id FROM handle WHERE member_id = ?"
-                    "  ORDER BY is_primary DESC, id ASC LIMIT 1)", (PORTRAIT_FIELD, m)).fetchone()
-                out[m] = int(row[0]) if row and row[0] else 0
+                h = acc.primary_handle_row(conn, m)
+                fid = acc.get_handle_profile(conn, h["id"]).get(PORTRAIT_FIELD)                     if h is not None else None
+                out[m] = fid if isinstance(fid, int) and fid else 0
         finally:
             conn.close()
-    except sqlite3.Error as e:
-        _warn("faces", "cannot read portraits from %s (%s)" % (accounts_path(), e))
+    except Exception as e:                      # noqa: BLE001 -- faces are optional
+        _warn("faces", "cannot read portraits from the account database (%r)" % (e,))
         for m in want:
             out.setdefault(m, 0)
     with _NAMES_LOCK:
@@ -539,8 +540,9 @@ def members_by_pol_id(pol_ids):
 
 def members_by_name(names, ttl=60.0):
     """{name: member id} -- the TM roster's name first (what TM draws), then
-    accounts.db's handle names, case-insensitively, through the read-only URI
-    and bound parameters only. Cached `ttl` s, misses included."""
+    the account database's handle names, case-insensitively, primary handle
+    first (accounts.member_id_by_handle_name). Cached `ttl` s, misses
+    included."""
     now = time.time()
     with _NAMES_LOCK:
         if now - _FACE_BY_NAME["t"] >= ttl or len(_FACE_BY_NAME["map"]) > 4096:
@@ -567,17 +569,15 @@ def members_by_name(names, ttl=60.0):
             rest.append(n)
     if rest:
         try:
-            conn = sqlite3.connect("file:%s?mode=ro" % accounts_path(), uri=True, timeout=5)
+            acc, conn = _accounts_conn()
             try:
                 for n in rest:
-                    row = conn.execute(
-                        "SELECT member_id FROM handle WHERE handle_name = ? COLLATE NOCASE"
-                        " ORDER BY is_primary DESC, id ASC LIMIT 1", (n,)).fetchone()
-                    found[n.lower()] = int(row[0]) if row and row[0] else 0
+                    found[n.lower()] = acc.member_id_by_handle_name(conn, n) or 0
             finally:
                 conn.close()
-        except sqlite3.Error as e:
-            _warn("facenames", "cannot read handle names from %s (%s)" % (accounts_path(), e))
+        except Exception as e:                  # noqa: BLE001 -- faces are optional
+            _warn("facenames", "cannot read handle names from the account "
+                               "database (%r)" % (e,))
     with _NAMES_LOCK:
         for k, mid in found.items():           # a failed read caches nothing
             _FACE_BY_NAME["map"][k] = mid
