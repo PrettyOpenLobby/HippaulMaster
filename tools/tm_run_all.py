@@ -72,9 +72,10 @@ SUITES = [
 
 
 #: suites that get a fresh PostgreSQL database of their own (see the docstring):
-#: this repository's store suite, and the core's resource suite, whose
+#: this repository's store suite, the board suites (the names and portraits
+#: come from the account tables), and the core's resource suite, whose
 #: accounts live in PostgreSQL too
-NEEDS_DB = {"tm_store", "core_resource"}
+NEEDS_DB = {"tm_store", "tm_board", "tm_faces", "core_resource"}
 
 
 def _fresh_database():

@@ -38,7 +38,6 @@ def setup(tmp):
     os.environ["POL_RESOURCE_DIR"] = res
     os.environ["POL_DATA_DIR"] = tmp
     os.environ["POL_TM_ROSTER_KEY"] = "tm:test:%s:roster" % os.path.basename(tmp)
-    os.environ["POL_ACCOUNTS_DB"] = os.path.join(tmp, "none.db")
     import tmauction
     import tmrank
     now = int(time.time())

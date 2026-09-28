@@ -20,7 +20,6 @@ import hashlib
 import json
 import os
 import socket
-import sqlite3
 import struct
 import sys
 import tempfile
@@ -33,6 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import tm_testenv                                                  # noqa: E402
 tm_testenv.setup(need_core=False)   # services/ ahead of tools/ (tmrank.py twice)
+import tmpg                                                        # noqa: E402
 
 
 
@@ -138,21 +138,11 @@ def setup(tmp):
     os.environ["POL_DATA_DIR"] = tmp
     os.environ["POL_TM_ROSTER_KEY"] = "tm:test:%s:roster" % os.path.basename(tmp)
     os.environ["POL_TM_WATCH_KEY"] = "tm:test:%s:tables-live" % os.path.basename(tmp)
-    db = os.path.join(tmp, "accounts.db")
-    os.environ["POL_ACCOUNTS_DB"] = db
-    c = sqlite3.connect(db)
-    c.execute("CREATE TABLE handle (id INTEGER PRIMARY KEY, member_id INTEGER, "
-              "handle_name TEXT, is_primary INTEGER)")
-    c.executemany("INSERT INTO handle (member_id, handle_name, is_primary) VALUES (?,?,?)",
-                  [(3, "Maria", 1), (3, "OldMaria", 0), (1, "NotCas", 1)])
     # the PlayOnline portrait: handle_profile field 19 = z_ficon (sheet*8 + tile);
-    # Maria's PRIMARY handle (1) has hnf304 tile 7, her other one something else
-    c.execute("CREATE TABLE handle_profile (handle_id INTEGER, field_id INTEGER, "
-              "val_int INTEGER, val_text TEXT, updated_at REAL)")
-    c.executemany("INSERT INTO handle_profile (handle_id, field_id, val_int) VALUES (?,?,?)",
-                  [(1, 19, 2439), (2, 19, 16), (1, 5, 77)])
-    c.commit()
-    c.close()
+    # Maria's PRIMARY handle has hnf304 tile 7, her other one something else
+    tmpg.pol_accounts({1: [("NotCas", True, None)],
+                       3: [("Maria", True, {19: 2439, 5: 77}),
+                           ("OldMaria", False, {19: 16})]})
     import tmauction
     import tmrank
     players = [
@@ -776,9 +766,12 @@ def main():
               "tools/tm_boardart_bake.py against your client first")
         return
     print("imports")
-    check("the board pulls in no game server, no accounts module, no responders",
-          not {"responders", "tetramaster", "accounts", "tmroom"} & set(sys.modules),
-          sorted({"responders", "tetramaster", "accounts", "tmroom"} & set(sys.modules)))
+    # the names and portraits come through OpenLobby's accounts functions,
+    # so `accounts` is loaded; the game servers and the lobby are not
+    check("the board pulls in no game server and no responders",
+          not {"responders", "tetramaster", "tmroom"} & set(sys.modules),
+          sorted({"responders", "tetramaster", "tmroom"} & set(sys.modules)))
+    accounts_before = tmpg.accounts_fingerprint()
 
     before = tree(tmp)
     s = boardtm.snapshot(now=NOW)
@@ -818,7 +811,7 @@ def main():
           and boardtm.tmrank.min_games() == 5, live)
     check("games = this week's count; before the counter existed, the career count",
           [r["games"] for r in live] == [3, 6, 1], live)
-    check("names: the TM roster first, then accounts.db's primary handle (read-only)",
+    check("names: the TM roster first, then the account database's primary handle",
           [r["name"] for r in live] == ["Fox", "Maria", "Star*Man"], live)
     check("the rating is tmrank's one formula", live[0]["rating"] == 370
           and live[0]["rating_text"] == "3.70" and live[0]["prize_text"] == "700", live[0])
@@ -906,13 +899,20 @@ def main():
     check("a missing list is 'not published', never the fixture's zero row",
           not s2["tabs"][4]["published"] and s2["tabs"][4]["rows"] == [])
     check("...and it still renders", boardtm.render(4, 0, s2)[:4] == b"\x89PNG")
-    os.environ["POL_ACCOUNTS_DB"] = os.path.join(tmp, "nope.db")
+    check("the account tables are untouched by every snapshot and render",
+          tmpg.accounts_fingerprint() == accounts_before)
+
+    def unreachable():
+        raise ConnectionError("the account database is down")
+    real_conn = boardtm._accounts_conn
+    boardtm._accounts_conn = unreachable
     boardtm._NAMES.update(t=0.0, map={})
-    s3 = boardtm.snapshot(now=NOW)
-    check("with no accounts.db the rows still come back",
+    try:
+        s3 = boardtm.snapshot(now=NOW)
+    finally:
+        boardtm._accounts_conn = real_conn
+    check("with the account database unreachable the rows still come back",
           [r["name"] for r in s3["tabs"][5]["rows"]] == ["Fox", "", "Star*Man"])
-    check("...and no database file is created by trying",
-          not os.path.exists(os.path.join(tmp, "nope.db")))
 
     print("the service")
     x = socket.socket()
@@ -956,4 +956,14 @@ def main():
 
 
 if __name__ == "__main__":
+    _url = tmpg.fresh_database()
+    if _url is None:
+        sys.exit(tmpg.skip_or_fail("tm_board_test"))
+    # The account tables are read from this database: polcore.db is pointed at
+    # it directly. POL_DATABASE_URL itself is dropped, so the board's Discord
+    # bookkeeping stays on the state files this suite pins, as in a checkout
+    # with no database (polboards.state_path).
+    from polcore import db as _db
+    _db.configure(_url)
+    os.environ.pop("POL_DATABASE_URL", None)
     main()

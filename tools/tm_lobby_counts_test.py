@@ -39,7 +39,6 @@ import tm_testenv                                                  # noqa: E402
 tm_testenv.setup()          # this tree's services + the OpenLobby core
 
 TMP = tempfile.mkdtemp(prefix="lobby-counts-")
-os.environ["POL_ACCOUNTS_DB"] = os.path.join(TMP, "accounts.db")
 os.environ["POL_DATA_DIR"] = TMP
 os.environ["POL_LOG_DIR"] = TMP
 os.environ["POL_TM_ROSTER_KEY"] = "tm:test:%s:roster" % os.path.basename(TMP)
