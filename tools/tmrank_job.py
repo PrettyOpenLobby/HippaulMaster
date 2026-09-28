@@ -18,6 +18,11 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TALLY = os.path.join(HERE, "tmrank.py")
+# tmstore: services/ in a checkout, /app (one level up) in the image
+for _p in (os.path.join(HERE, os.pardir, "services"), os.path.dirname(HERE)):
+    if os.path.isfile(os.path.join(_p, "tmstore.py")):
+        sys.path.insert(0, os.path.normpath(_p))
+        break
 
 
 def next_sunday_0005(now):
@@ -38,6 +43,9 @@ def publish():
 
 
 def main():
+    # Tetra Master's tables (the champion) before the first publish needs them
+    import tmstore
+    tmstore.migrate_at_start("tmrank_job")
     if os.environ.get("TM_RANK_AT", "").strip().lower() == "now":
         publish()
     while True:
