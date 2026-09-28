@@ -7,24 +7,22 @@ the public TM board (services/boardtm.py), for a phone client:
 
     python tools/tm_faces_test.py
 
-Pins, against a temporary accounts.db and room roster: a POL-ID (tmroom's
+Pins, against a throwaway account database and room roster: a POL-ID (tmroom's
 published `polids`) and a name (the TM roster's, then a handle's, either case)
 reach the member's PRIMARY handle's field 19; unknown is 0 / 404; bad input is
 a 400 (hex length, printable ASCII <= 15, one kind, <= 50 keys); a quote in a
-name is data, not SQL; the database is opened read-only and left
-byte-identical; the lookups are CORS-open with a short cache; and `?id=`
+name is data, not SQL; the account tables are left exactly as they were;
+the lookups are CORS-open with a short cache; and `?id=`
 answers exactly what origin/main's boardtm answered.
 
 The portraits are the ones YOU baked (tools/tm_boardart_bake.py --faces); with
 no baked sheets in services/boardart/faces/ the test SKIPs.
 """
-import hashlib
 import importlib.util
 import io
 import json
 import os
 import socket
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -34,6 +32,8 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 SERVICES = os.path.join(HERE, os.pardir, "services")
 sys.path.insert(0, SERVICES)
+sys.path.append(HERE)               # after services/: tools/tmrank.py shares a name
+import tmpg                         # noqa: E402
 
 CHECKS = []
 ELENA = "AB12CE0000000003"          # member 3: primary handle Elena, face 2439
@@ -49,37 +49,22 @@ def check(label, cond, detail=""):
         raise AssertionError(label)
 
 
-def sha(path):
-    with open(path, "rb") as fh:
-        return hashlib.sha256(fh.read()).hexdigest()
-
-
 def setup(tmp):
     os.environ["POL_DATA_DIR"] = tmp
     os.environ["POL_RESOURCE_DIR"] = os.path.join(tmp, "resources")
     os.makedirs(os.environ["POL_RESOURCE_DIR"])
     os.environ["POL_TM_ROSTER_KEY"] = "tm:test:%s:roster" % os.path.basename(tmp)
-    db = os.path.join(tmp, "accounts.db")
-    os.environ["POL_ACCOUNTS_DB"] = db
-    c = sqlite3.connect(db)
-    c.execute("CREATE TABLE handle (id INTEGER PRIMARY KEY, member_id INTEGER, "
-              "handle_name TEXT, is_primary INTEGER)")
-    c.executemany("INSERT INTO handle (member_id, handle_name, is_primary) VALUES (?,?,?)",
-                  [(3, "Elena", 1), (3, "OldMaria", 0), (1, "NotLex", 1), (5, "Zidane", 1)])
-    # field 19 = z_ficon: Elena's PRIMARY handle 1 is hnf304 tile 7; her other
-    # handle (2) has another portrait that must NOT win; Zidane (handle 4) 16
-    c.execute("CREATE TABLE handle_profile (handle_id INTEGER, field_id INTEGER, "
-              "val_int INTEGER, val_text TEXT, updated_at REAL)")
-    c.executemany("INSERT INTO handle_profile (handle_id, field_id, val_int) VALUES (?,?,?)",
-                  [(1, 19, 2439), (2, 19, 16), (1, 5, 77), (4, 19, 16)])
-    c.commit()
-    c.close()
+    # field 19 = z_ficon: Elena's PRIMARY handle is hnf304 tile 7; her other
+    # handle has another portrait that must NOT win; Zidane 16
+    tmpg.pol_accounts({1: [("NotLex", True, None)],
+                       3: [("Elena", True, {19: 2439, 5: 77}),
+                           ("OldMaria", False, {19: 16})],
+                       5: [("Zidane", True, {19: 16})]})
     import tmstore
     # tmroom stores POL-IDs as the client's own 16 upper-case hex digits
     tmstore.Snapshot(tmstore.roster_key()).write(
         {"names": {"1": "Lex", "3": "Elena"},
          "polids": {"3": ELENA, "1": LEX, "9": "garbage"}})
-    return db
 
 
 def origin_boardtm(tmp):
@@ -106,8 +91,8 @@ def main():
               "(tools/tm_boardart_bake.py --faces)")
         return
     tmp = tempfile.mkdtemp(prefix="tmfaces-")
-    db = setup(tmp)
-    before = sha(db)
+    setup(tmp)
+    before = tmpg.accounts_fingerprint()
     import boardtm
     import polboards
     from PIL import Image
@@ -115,8 +100,8 @@ def main():
     R = boardtm.route
 
     print("imports")
-    check("the board still pulls in no accounts module, tmroom or responders",
-          not {"responders", "tetramaster", "accounts", "tmroom"} & set(sys.modules))
+    check("the board still pulls in no tmroom or responders",
+          not {"responders", "tetramaster", "tmroom"} & set(sys.modules))
 
     print("by POL-ID")
     code, png, ctype, cache, hdrs = R("/face.png", {"nn": [ELENA]}, args)
@@ -138,7 +123,7 @@ def main():
     check("/face.png?name=elena (any case) is Elena's portrait", code == 200 and png2 == png)
     check("...a member's NON-primary handle still draws the PRIMARY one's portrait",
           R("/face.png", {"name": ["OLDMARIA"]}, args)[1] == png)
-    check("...a handle only accounts.db knows (not in the TM roster) resolves",
+    check("...a handle only the account database knows (not in the TM roster) resolves",
           R("/face.png", {"name": ["zidane"]}, args)[1] == boardtm.face_png(16))
     check("an unknown name, and a roster name with no portrait, are 404s",
           R("/face.png", {"name": ["Nobody"]}, args)[0] == 404
@@ -190,9 +175,8 @@ def main():
               R("/face.png", q, args) == old.route("/face.png", q, args))
 
     print("read-only")
-    check("accounts.db is byte-identical and has no journal left behind",
-          sha(db) == before and not os.path.exists(db + "-journal")
-          and not os.path.exists(db + "-wal"))
+    check("the account tables are exactly as they were",
+          tmpg.accounts_fingerprint() == before)
 
     print("the service")
     x = socket.socket()
@@ -230,9 +214,12 @@ def main():
               and h["Access-Control-Allow-Origin"] is None)
     finally:
         srv.shutdown()
-    check("accounts.db is still byte-identical", sha(db) == before)
+    check("the account tables are still as they were",
+          tmpg.accounts_fingerprint() == before)
     print("[tm_faces_test] OK -- %d checks" % len(CHECKS))
 
 
 if __name__ == "__main__":
+    if tmpg.fresh_database() is None:
+        sys.exit(tmpg.skip_or_fail("tm_faces_test"))
     main()

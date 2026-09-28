@@ -27,7 +27,6 @@ os.environ["POL_DATA_DIR"] = TMP
 os.environ["POL_RESOURCE_DIR"] = os.path.join(TMP, "resources")
 os.environ["POL_TM_ROSTER_KEY"] = "tm:test:%s:roster" % os.path.basename(TMP)
 os.environ["POL_TM_WATCH_KEY"] = "tm:test:%s:tables-live" % os.path.basename(TMP)
-os.environ["POL_ACCOUNTS_DB"] = os.path.join(TMP, "none.db")
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, os.pardir, "services"))
 
