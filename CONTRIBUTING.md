@@ -40,8 +40,6 @@ services/
   boardart/         the board's fonts; its art is baked from your install
 tools/              self-tests (`*_test.py`), the runner (tm_run_all.py) and
                     operator tools (tmrank_job.py, tm_money_reset.py, ...)
-tools/split/        the generator that cut tetramaster.py and tmtitle.py into
-                    their packages, and the two name maps
 config/polpro.json  reply templates for the POLpro plaintext channel
 ```
 
@@ -96,7 +94,7 @@ log line every game module uses.
 ### The facades
 
 `services/tetramaster.py` is where the whole game server used to live, and
-`services/tmtitle.py` the whole plugin. Each is now a generated module that
+`services/tmtitle.py` the whole plugin. Each is now a thin module that
 imports its package and forwards `<module>.<name>` reads and writes to the
 module that owns the name. The core (`POL_TITLES=tmtitle`), `tmtables`, the
 tools and the tests keep using `import tetramaster` and `import tmtitle`,
@@ -107,36 +105,26 @@ lands in the owning module, so the code under test sees it.
 rebinding the tools make. New code inside a package refers to a sibling as
 `<module>.<name>`.
 
-### Regenerating the split
+### Changing the packages
 
-Each package is the output of `tools/split/split_tetramaster.py` over the
-flat file and a name map (`tools/split/split_tetramaster_map.txt`,
-`tools/split/split_tmtitle_map.txt`), which names the module each top-level
-function, class and global belongs to. Code ported from elsewhere as a change
-to a flat file is split again the same way, starting from the flat file as it
-was in the last commit before the split:
+`tmgame/` was generated once from the single-file `tetramaster.py` in commit
+4161062, and `tmplugin/` from the single-file `tmtitle.py` in commit
+f8ac59d. The packages are the source now and are edited directly; nothing
+regenerates them. Code written against a single file elsewhere is carried
+over by hand into the module that owns that code today.
 
-```
-git show <last flat commit>:services/tetramaster.py > flat.py   # then merge into flat.py
-python tools/split/split_tetramaster.py --src flat.py \
-    --map tools/split/split_tetramaster_map.txt \
-    --out services/tmgame --facade services/tetramaster.py
-
-git show <last flat commit>:services/tmtitle.py > flat_title.py   # likewise
-python tools/split/split_tetramaster.py --src flat_title.py \
-    --map tools/split/split_tmtitle_map.txt \
-    --out services/tmplugin --facade services/tmtitle.py \
-    --summary "Tetra Master as a title plugin for the OpenLobby core." \
-    --package-summary "The Tetra Master title plugin, one module per concern." \
-    --used-by '`POL_TITLES={facade}` in the core, and the tools and tests' \
-    --example '`R._live_rooms = lambda: live`' --doc-heading "The plugin"
-```
-
-A new top-level name needs a line in the map; the tool lists anything
-unmapped and refuses to write until it is placed. It also refuses a module
-name that a function in the package uses as a local variable. A core name the
-plugin starts to use is added to `_CORE_NAMES` and to the `[corenames]` list
-in the map.
+`tetramaster.py` and `tmtitle.py` stay as the names everything imports and
+as the facades described above. Each one forwards only the names in its
+`_OWNERS` table, which maps every name to the module that owns it, so a new
+top-level name is not reachable as `tetramaster.NAME` or `tmtitle.NAME`
+until it has a line there. Package code does not need one, since it uses
+`<module>.<name>`. A tool, a test or the core that reads or rebinds the name
+through the facade does, and `tools/facade_rebind_check.py` fails on a
+rebinding in `tools/` or `services/` of a name the table does not list. A
+new module is imported at the top of the facade and added to `_MODULES`. A
+core name the plugin starts to use is added to `_CORE_NAMES` in
+`tmplugin/corenames.py`, and to `tmtitle.py`'s `_OWNERS` under `corenames`
+if anything reaches it as `tmtitle.<name>`.
 
 ## Running the checks
 
