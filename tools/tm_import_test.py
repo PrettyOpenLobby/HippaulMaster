@@ -171,9 +171,21 @@ def old_files(base):
         json.dump(d, fh)
     with open(os.path.join(state, "README.txt"), "w") as fh:
         fh.write("not state")
-    with open(os.path.join(state, "jan_discord.json"), "w") as fh:
+    with open(os.path.join(state, "tm_old_discord.json"), "w") as fh:
         fh.write("not json")
+    # the other boards' files: the old state directory was one for every board
+    for other in OTHER_BOARDS:
+        with open(os.path.join(state, other), "w") as fh:
+            json.dump({"message_id": "1"}, fh)
+    # a bot's own file for this board's live feed, per guild
+    with open(os.path.join(state, "tm_live_bot_99_discord.json"), "w") as fh:
+        json.dump(TM_BOT, fh)
     return (event, champion, state), (old_event, old_champion, old_state), member_list
+
+
+OTHER_BOARDS = ("jan_discord.json", "jan_live_bot_99_discord.json",
+                "fmo_discord.json", "ffxi_auction_discord.json")
+TM_BOT = {"msgs": {}, "done": []}
 
 
 def digest(root):
@@ -294,12 +306,16 @@ def _main(base):
 
     print("import board_state")
     code, out = run("board_state", state)
-    check("exit 0", code == 0 and "Done: 3 row(s) written." in out, out)
+    check("exit 0", code == 0 and "Done: 4 row(s) written." in out, out)
     rows = {r["name"]: r["data"] for r in db.query("SELECT name, data FROM tm_board_state")}
-    check("a row per state file, named as the board names it, holding the file",
-          rows == old_state, sorted(rows))
+    check("a row per state file of this board, named as the board names it, "
+          "holding the file",
+          rows == dict(old_state, tm_live_bot_99_discord=TM_BOT), sorted(rows))
     check("a file that is not board state, and one that is not JSON, are skipped",
-          "skipped README.txt" in out and "skipped jan_discord.json" in out, out)
+          "skipped README.txt" in out and "skipped tm_old_discord.json" in out, out)
+    check("the other boards' files are skipped as theirs",
+          all("skipped %s: another board's state" % n in out for n in OTHER_BOARDS),
+          out)
     os.environ.pop("POL_BOARDS_STATE_DIR", None)
     import polboards
     args = polboards.build_parser().parse_args(["--tm-port", "1"])
