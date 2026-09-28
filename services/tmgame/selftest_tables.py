@@ -140,9 +140,15 @@ def _selftest_packs():
             common._say("FAIL: a COM deck is five cards, /Com=%d gave %d"
                  % (ci, len(deck)))
             ok = False
-        # A real deck record's pool is many cards, so five draws are not all
-        # one id -- the degenerate single-card deck the tester saw.
-        if len(set(deck)) == 1:
+        # A real deck record's pool is many cards, so its draws are not all
+        # one id -- the degenerate single-card deck the tester saw. One deal
+        # of a weighted pool can come up five of a kind by chance (record 27
+        # did, in one of twelve runs of this suite), so look at several deals:
+        # a single-card record gives one id however often it is drawn.
+        ids = set(deck)
+        for _deal in range(7):
+            ids.update(r.split(b"|")[0] for r in vscom._com_deck_rows(ci))
+        if len(ids) == 1:
             common._say("FAIL: /Com=%d dealt five identical cards (id %r) from record "
                  "%d -- the single-card Prize Center bug" % (ci, deck[0], rec_no))
             ok = False
