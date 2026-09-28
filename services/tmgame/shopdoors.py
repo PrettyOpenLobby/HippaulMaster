@@ -821,10 +821,9 @@ def _checkout_probe_lines():
 def _init_body(arm, member_id=None, amount=None):
     """`@<arm>=` plus exactly the fields that arm parses, in its parse order.
 
-    `amount` is what `/M=` and `/PM=` carry when the caller knows better than the
-    wallet -- the Check Out door's proceeds awaiting collection, the same number
-    `_aucmoney_line` is handed, so the two messages cannot disagree about what
-    the screen is being told.
+    `amount` is the Check Out door's proceeds awaiting collection, the same
+    number `_aucmoney_line` is handed. It is never served as `/M=`: on
+    `@EcmInit` that field assigns the live wallet (see the `M` branch below).
 
     `@Init` DELEGATES to `_shopinit_body` unchanged. The card shop is the one
     door that is not in question here, and its body stays byte-for-byte what it
@@ -835,7 +834,6 @@ def _init_body(arm, member_id=None, amount=None):
     """
     if arm == "Init":
         return _shopinit_body(member_id)
-    money = purse.money_of(member_id) if amount is None else amount
     shop_defaults = dict(cardshop._SHOPINIT_FIELDS)
     out = bytearray(b"@" + arm.encode("ascii") + b"=")
     for name in _INIT_ARM_FIELDS[arm][1]:
@@ -845,8 +843,19 @@ def _init_body(arm, member_id=None, amount=None):
             out += b"/N=%d" % _shop_n()
             continue
         if name == "M":
-            # Parsed and discarded by the arm -- carry the amount.
-            out += b"/M=%d" % money
+            # WARNING: `/M=` ON `@EcmInit` IS THE LIVE WALLET. "Parsed and
+            # discarded" is true of `@Init` only. The EcmInit arm clamps `/M=`
+            # to >= 0 and stores it at 0x105816 `mov [esi+0xc8], eax` - save
+            # struct +0xC8, the same field `@ComGameInit=/M=` assigns. The
+            # money sections then do wallet += [+0xCC] (0x134E4B / 0x135E4B),
+            # so the proceeds add on top of THIS. Serving the proceeds here
+            # assigned them AS the wallet: a buyer (proceeds 0) who won an
+            # auction for 50 went from 450 gil to 0 at Check Out, while the
+            # server-side balance stayed right. The same write explains the
+            # old "screen read 200 instead of 9800+200" that was pinned on
+            # /PM=. Always the real wallet, read before the collect credit;
+            # `@EInit` parses /M= but does not store it.
+            out += b"/M=%d" % purse.money_of(member_id)
             continue
         if name == "PM":
             # WARNING: `/PM=` IS THE WALLET BASE, NOT THE AMOUNT. The arm zeroes
