@@ -21,15 +21,13 @@ import threading
 #: WARNING: THAT IS RULE 5 FAILING SILENTLY. "The fix did not run" and "the fix ran
 #: and logged nothing" are indistinguishable when the log cannot leave the
 #: process, and this project has lost days to exactly that distinction.
-#: `_say()` is defined FURTHER DOWN (search `def _say(*args`). A second, broken
-#: definition used to sit right here and was removed 2026-08-26: its body called
-#: `_say(msg, flush=True)` against its own one-positional-arg signature, so it
-#: raised `TypeError` instead of logging -- and the `except UnicodeEncodeError`
-#: wrapped around it could not catch that. It was harmless only by accident,
-#: because the later definition rebinds the name at module scope; any
-#: module-level call reaching it first would have raised. (Checked before
-#: removal: no module-level `_say(` call precedes the real definition.)
+#: `_say()` lives in tmgame/common.py, and the optional imports below log
+#: through `common._say`. When the flat module was split into this package the
+#: calls kept the bare name `_say`, which nothing here defined, so a failed
+#: optional import raised NameError instead of logging (tools/
+#: tm_deps_optional_test.py).
 
+from . import common
 
 import tm_cardprm
 #: The board, the arrows and the battle arithmetic -- see `services/tmbattle.py`.
@@ -52,8 +50,8 @@ try:
     import tmsave
 except ImportError as _e:                                    # pragma: no cover
     tmsave = None
-    _say("tm: tmsave unavailable (%s) -- collections will be RECORDED but not "
-          "delivered; every launch will start empty" % _e)
+    common._say("tm: tmsave unavailable (%s) -- collections will be RECORDED but not "
+                "delivered; every launch will start empty" % _e)
 try:
     # PRIZE POINTS: the second currency, the weekly lucky cards, and the
     # `@ExcInit=` body the Prize Center opens on. Optional for the same reason
@@ -61,8 +59,8 @@ try:
     import tmprize
 except ImportError as _e:                                    # pragma: no cover
     tmprize = None
-    _say("tm: tmprize unavailable (%s) -- the Prize Center will fall back to "
-          "the CARD SHOP's opener and no lucky card will ever be counted" % _e)
+    common._say("tm: tmprize unavailable (%s) -- the Prize Center will fall back to "
+                "the CARD SHOP's opener and no lucky card will ever be counted" % _e)
 try:
     # CARD ROLL + GROWTH: a card is rolled below its CardPrm ceiling at
     # acquisition and grows toward it through use. Optional for the same reason
@@ -71,8 +69,8 @@ try:
     import tmroll
 except ImportError as _e:                                    # pragma: no cover
     tmroll = None
-    _say("tm: tmroll unavailable (%s) -- cards will serve NOMINAL (all-maxed) "
-          "stats; no roll or growth" % _e)
+    common._say("tm: tmroll unavailable (%s) -- cards will serve NOMINAL (all-maxed) "
+                "stats; no roll or growth" % _e)
 import re
 import struct
 import time

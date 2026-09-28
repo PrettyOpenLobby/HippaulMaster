@@ -51,6 +51,8 @@ SUITES = [
     ("tetramaster",   [PY, "tetramaster.py", "--selftest"],    SERVICES, False),
     # the facade over services/tmgame/ forwards every rebinding the tools make
     ("tm_facade",     [PY, "facade_rebind_check.py"],          HERE,     False),
+    # a missing optional sibling (tmsave, tmprize, tmroll) is logged, not fatal
+    ("tm_deps_optional", [PY, "tm_deps_optional_test.py"],     HERE,     False),
     ("tm_title",      [PY, "tm_title.py", "--selftest"],       SERVICES, False),
     ("tmsave",        [PY, "tmsave.py", "--selftest"],         SERVICES, False),
     ("tmrank",        [PY, "tmrank.py", "--selftest"],         SERVICES, False),
