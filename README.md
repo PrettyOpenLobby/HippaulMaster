@@ -62,6 +62,36 @@ project; put it in a shell alias, or set `COMPOSE_FILE` and
 `COMPOSE_PROJECT_NAME` in your environment. To take the title out again,
 run the core's own `docker compose up -d` from its checkout.
 
+### Moving from an earlier release
+
+Earlier releases kept the tournament standings, the weekly champion and the
+board's Discord bookkeeping as files. They now live in OpenLobby's
+PostgreSQL (`tm_event_standing`, `tm_champion`, `tm_board_state`), and the
+files are imported once, after OpenLobby's own import (its
+docs/database.md, "Moving an existing /data") and before the title starts.
+The collections, saves, prize records, auction records and rank lists need
+no command here: OpenLobby's import copies them into its `blob` table,
+where this title now reads them. From this directory:
+
+```
+DC="docker compose --project-directory ../openlobby -f ../openlobby/docker-compose.yml -f docker-compose.yml"
+$DC run --rm --no-deps --entrypoint python tmrank tmstore.py import event_state /data/tm-event-state.json
+$DC run --rm --no-deps --entrypoint python tmrank tmstore.py import champion /data/tm-champion.json
+$DC run --rm --no-deps -v openlobby_tm-board-state:/state:ro --entrypoint python tmrank tmstore.py import board_state /state
+```
+
+The last reads the board's old state volume (`openlobby_tm-board-state`:
+the board ran in the core's compose project, so the volume carries its
+name; `docker volume ls` shows the name on your host) and matters only
+where the board posted to Discord. Without it the board posts its messages
+afresh. Each command only reads its source, runs in one transaction,
+prints what it imported and each entry it could not map, and refuses a
+table that already holds rows unless given `--merge`, which adds only the
+keys the table lacks. `--dry-run` prints the same report and writes
+nothing, and a second run changes nothing. A file that is not there has
+nothing to import: a server that never ran a tournament has no
+`tm-event-state.json`.
+
 ### Without building
 
 The image is published to `ghcr.io/prettyopenlobby/crystalmaster` on every push,

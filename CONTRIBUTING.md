@@ -190,6 +190,15 @@ table is keyed by the number alone and shared with the core and the other
 titles, so CrystalMaster keeps to 3001-3999 and a table name that starts
 with `tm_`; a reused number is silently skipped.
 
+Moving a file into the database comes with an importer in `tmstore.py`
+(`python tmstore.py import event_state|champion|board_state ...`). It only
+reads its source, runs in one transaction, refuses a table that already
+holds rows unless given `--merge`, writes nothing with `--dry-run`, and
+changes nothing on a second run. `tools/tm_import_test.py` writes the old
+files with the code from `game-split` and checks each import against the
+new code. The command is added to `TITLES` in OpenLobby's
+`tools/db_import.py` and to its `docs/database.md`.
+
 `live_sessions.py` is the core's. Tetra Master publishes its live-match
 count with `live_sessions.write_marker` (`live:tm`); a copy of the module
 must not be added here. `.dockerignore` keeps one out of the image and the
