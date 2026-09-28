@@ -591,7 +591,31 @@ def _deck_slot_bytes(data, cards):
         best = next((i for i in cand if len(cards[i]) > 6 and len(v) >= 6
                      and [int(cards[i][1]), int(cards[i][3]), int(cards[i][4]),
                           int(cards[i][6])] == [v[1], v[3], v[4], v[5]]),
-                    cand[0])
+                    None)
+        if best is None and len(v) >= 6:
+            # A CARD GROWS AS IT IS PLAYED, and the slot map keeps the stats
+            # it had when it was placed. Taking the first copy of the id here
+            # swapped a grown card (a 9M56 Hades) for a weaker copy (7M56)
+            # after a game, and the deck's order shuffled with it. The
+            # ARROWS are the copy's identity (they never change); its stats
+            # only grow. So: the same-arrows copy whose stats are all >= the
+            # recorded ones, the nearest such; then any same-arrows copy;
+            # then the nearest by stats. The map follows the card it matched.
+            def _st(i):
+                r = cards[i]
+                return [int(r[1]), int(r[3]), int(r[4])]
+            same_arrows = [i for i in cand if len(cards[i]) > 6 and int(cards[i][6]) == v[5]]
+            grown = [i for i in same_arrows
+                     if all(a >= b for a, b in zip(_st(i), [v[1], v[3], v[4]]))]
+            dist = lambda i: sum(abs(a - b) for a, b in zip(_st(i), [v[1], v[3], v[4]]))
+            pool = grown or same_arrows or cand
+            best = min(pool, key=dist)
+            row = cards[best]
+            if len(row) > 6:
+                slots[s_str] = [int(row[0]), int(row[1]), int(row[2]), int(row[3]),
+                                int(row[4]), int(row[6])]
+        elif best is None:
+            best = cand[0]          # a slot recorded without stats: by id only
         used.add(best)
         out[best] = slot
     return out
