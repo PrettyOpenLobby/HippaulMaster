@@ -266,6 +266,13 @@ STAT_FIELDS_WORD = (OPPONENTS_OFF, RING_INDEX_OFF, CONSEC_WINS_OFF,
 #: a **32-byte STRING at `+0x7D`** (`0x1012B6` copies 0x20 bytes to struct
 #: `+0x128`), which sits beside the streak counters and is the obvious shape for
 #: `Memorable Win`. Pinning them is a renderer read, not another marker save.
+#: A second source, Project Crystal Server's save struct
+#: (`TMServer/Models/GameDataFile.cs`), puts the same run in the same order:
+#: a streak word, a 1-byte unknown, then 32 bytes it names
+#: `NameOfMemorableWin`. Its literal offsets read 2 higher than ours because
+#: of C# field padding; by order they are our `+0x7A`, `+0x7C`, `+0x7D`.
+#: So `+0x7D` is Memorable Win on that reading; it has not been
+#: screen-verified here yet.
 STAT_FIELDS_UNLABELLED = (0x3E, 0x40, 0x44, 0x7A, 0x7C, 0x7D)
 
 CARDS_OFF = 0x148               #: 0x5091362 `mov edi, 0x5224D1A` is this + 2
@@ -801,10 +808,15 @@ def build_marker(base=None, lo=MARKER_LO, hi=MARKER_HI, start=MARKER_START):
 #: evidence of absence, and it is why this exists: **the SCREEN is the only
 #: reader we can interrogate.**
 #:
-#: `Memorable Win` (Playdat 43 / 84) is the standing candidate for the 17-byte
-#: pair -- 17 bytes is 16 chars plus a NUL, the shape of every player NAME in
-#: this game -- but which field is which is NOT established, and none of them is
-#: authored. One launch with this save settles it.
+#: `+0x07D` (32 bytes): Crystal names it NameOfMemorableWin (see
+#: `STAT_FIELDS_UNLABELLED`; not yet screen-verified here). That puts
+#: `Memorable Win` on the 32-byte field rather than on either 17-byte one.
+#:
+#: Before that reading, `Memorable Win` (Playdat 43 / 84) was the standing
+#: candidate for the 17-byte pair -- 17 bytes is 16 chars plus a NUL, the shape
+#: of every player NAME in this game -- but which field is which is NOT
+#: established, and none of them is authored. One launch with this save
+#: settles it.
 STRING_FIELDS = ((0x07D, 32), (0x104, 17), (0x115, 17))
 
 
