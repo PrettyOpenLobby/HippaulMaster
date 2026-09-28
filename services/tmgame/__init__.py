@@ -1,7 +1,7 @@
 """The Tetra Master game server, one module per concern.
 
-    deps.py             Imports shared by the package's modules, and the optional sibling services
-                        (tmauction, tmsave, tmprize, tmroll).
+    deps.py             Imports shared by the package's modules, and the optional ones (tmauction,
+                        tmprize, tmroll, tmsave), which are None when the import fails.
     protocol.py         The TM0 game channel: message codes, the E-body header (encode_code,
                         decode_ebody) and the capture-log summaries.
     common.py           The flushed log line (_say) and the small helpers every module leans on:

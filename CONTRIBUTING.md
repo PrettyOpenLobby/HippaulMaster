@@ -10,11 +10,13 @@ run the checks, and what a pull request needs.
 
 ```
 services/
-  tmtitle.py        the plugin the core loads (POL_TITLES=tmtitle): the seam
-                    that hands the core's traffic to the game, plus the room
-                    roster, auction, rankings, trade relay and lobby counts
-  tetramaster.py    the game server's public name and a facade over tmgame/;
-                    see below
+  tmtitle.py        the plugin's public name (POL_TITLES=tmtitle) and a facade
+                    over tmplugin/; see below
+  tmplugin/         the plugin the core loads: the seam that hands the core's
+                    traffic to the game, plus the room roster, auction,
+                    rankings, zones and the lobby blobs (tmplugin/__init__.py
+                    lists the modules)
+  tetramaster.py    the game server's public name and a facade over tmgame/
   tmgame/           the game server, one module per concern
                     (tmgame/__init__.py lists them)
   tmroom.py         the live room roster behind b/g/PTL (shared with Janhourou)
@@ -38,9 +40,25 @@ services/
   boardart/         the board's fonts; its art is baked from your install
 tools/              self-tests (`*_test.py`), the runner (tm_run_all.py) and
                     operator tools (tmrank_job.py, tm_money_reset.py, ...)
-tools/split/        the generator that cut tetramaster.py into tmgame/
+tools/split/        the generator that cut tetramaster.py and tmtitle.py into
+                    their packages, and the two name maps
 config/polpro.json  reply templates for the POLpro plaintext channel
 ```
+
+A line from a Tetra Master client reaches the core first. The core hands it to
+the plugin (`tmplugin/plugin.py`, the `titles.Title` subclass), and a game
+line goes on through `tmplugin/envelope.py` to `tetramaster.handle_line` in
+`tmgame/dispatch.py`. Lobby-band fetches (zone and room lists, `b/g/PTL`,
+the manifests) stay in `tmplugin/`.
+
+`tmplugin/` in brief: `plugin.py` is every hook the core calls and the place
+to start; `corenames.py` binds the core names the plugin uses (`log`,
+`_session_get`, `ROOMS`, ...) from `titles.core`, and the other modules refer
+to them as `corenames.<name>`; `envelope.py` is the auth band's game channel;
+`roster.py`, `auction.py`, `rankings.py`, `pool.py` and `chat.py` are the
+auth-band record families; `fetches.py`, `manifests.py`, `zones.py`,
+`ptl.py`, `events.py`, `templates.py` and `savedefaults.py` are the lobby
+band's resources.
 
 `tmgame/` is split along the game. Reading order for a first visit:
 
@@ -70,39 +88,55 @@ config/polpro.json  reply templates for the POLpro plaintext channel
 8. `selftest_*.py`: the selftest suite, run by `python tetramaster.py
    --selftest`.
 
-`deps.py` holds the imports the modules share, including the optional
-siblings (`tmauction`, `tmsave`, `tmprize`, `tmroll`) that are `None` when
-missing. `common.py` holds `_say`, the log line every module uses.
+In both packages `deps.py` holds the imports the modules share; in `tmgame/`
+that includes the optional siblings (`tmauction`, `tmsave`, `tmprize`,
+`tmroll`), which are `None` when missing. `tmgame/common.py` holds `_say`, the
+log line every game module uses.
 
-### The facade
+### The facades
 
-`services/tetramaster.py` is where the whole game server used to live. It is
-now a generated module that imports `tmgame` and forwards
-`tetramaster.<name>` reads and writes to the module that owns the name.
-`tmtitle`, `tmtables`, the tools and the tests keep using `import
-tetramaster`, including the tests that rebind a name to quiet or fake a
-helper (`tm._say = lambda *a, **k: None`): the write lands in the owning
-module, so the code under test sees it. `tools/facade_rebind_check.py` proves
-the forwarding holds for every rebinding the tools make. New code inside
-`tmgame/` refers to a sibling as `<module>.<name>`.
+`services/tetramaster.py` is where the whole game server used to live, and
+`services/tmtitle.py` the whole plugin. Each is now a generated module that
+imports its package and forwards `<module>.<name>` reads and writes to the
+module that owns the name. The core (`POL_TITLES=tmtitle`), `tmtables`, the
+tools and the tests keep using `import tetramaster` and `import tmtitle`,
+including the tests that rebind a name to quiet or fake a helper
+(`tm._say = lambda *a, **k: None`, `R._live_rooms = lambda: live`): the write
+lands in the owning module, so the code under test sees it.
+`tools/facade_rebind_check.py` proves the forwarding holds for every
+rebinding the tools make. New code inside a package refers to a sibling as
+`<module>.<name>`.
 
 ### Regenerating the split
 
-The package is the output of `tools/split/split_tetramaster.py` over the flat
-file and `tools/split/split_tetramaster_map.txt`, which names the module each
-top-level function, class and global belongs to. Code ported from elsewhere
-as a change to the flat file is split again the same way:
+Each package is the output of `tools/split/split_tetramaster.py` over the
+flat file and a name map (`tools/split/split_tetramaster_map.txt`,
+`tools/split/split_tmtitle_map.txt`), which names the module each top-level
+function, class and global belongs to. Code ported from elsewhere as a change
+to a flat file is split again the same way, starting from the flat file as it
+was in the last commit before the split:
 
 ```
-git show <split commit>^:services/tetramaster.py > flat.py   # then merge into flat.py
+git show <last flat commit>:services/tetramaster.py > flat.py   # then merge into flat.py
 python tools/split/split_tetramaster.py --src flat.py \
     --map tools/split/split_tetramaster_map.txt \
     --out services/tmgame --facade services/tetramaster.py
+
+git show <last flat commit>:services/tmtitle.py > flat_title.py   # likewise
+python tools/split/split_tetramaster.py --src flat_title.py \
+    --map tools/split/split_tmtitle_map.txt \
+    --out services/tmplugin --facade services/tmtitle.py \
+    --summary "Tetra Master as a title plugin for the OpenLobby core." \
+    --package-summary "The Tetra Master title plugin, one module per concern." \
+    --used-by '`POL_TITLES={facade}` in the core, and the tools and tests' \
+    --example '`R._live_rooms = lambda: live`' --doc-heading "The plugin"
 ```
 
 A new top-level name needs a line in the map; the tool lists anything
 unmapped and refuses to write until it is placed. It also refuses a module
-name that a function in the package uses as a local variable.
+name that a function in the package uses as a local variable. A core name the
+plugin starts to use is added to `_CORE_NAMES` and to the `[corenames]` list
+in the map.
 
 ## Running the checks
 
