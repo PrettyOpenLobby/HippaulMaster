@@ -26,9 +26,9 @@ services:
   # login builds the title image; authsess consumes it. Exactly one builder,
   # so parallel builds cannot race on the tag.
   login:
-    image: crystalmaster:latest
+    image: hippaulmaster:latest
     build:
-      context: ../crystalmaster
+      context: ../hippaulmaster
       args:
         OPENLOBBY_IMAGE: "${OPENLOBBY_IMAGE:-openlobby:latest}"
     pull_policy: build
@@ -50,7 +50,7 @@ services:
       POL_TM_EVENT_WINDOW: "${POL_TM_EVENT_WINDOW:-}"
 
   authsess:
-    image: crystalmaster:latest
+    image: hippaulmaster:latest
     pull_policy: never
     environment:
       POL_TITLES: tmtitle
@@ -73,7 +73,7 @@ services:
   # Sunday, publishes, and sleeps again. TM_RANK_AT=now publishes at start
   # too (a fresh server, or after restoring data).
   tmrank:
-    image: crystalmaster:latest
+    image: hippaulmaster:latest
     pull_policy: never
     restart: unless-stopped
     entrypoint: ["python", "tools/tmrank_job.py"]
@@ -96,7 +96,7 @@ services:
   # drawn with art baked from your own client (tools/tm_boardart_bake.py).
   #   docker compose ... --profile board up -d
   board:
-    image: crystalmaster:latest
+    image: hippaulmaster:latest
     pull_policy: never
     restart: unless-stopped
     profiles: ["board"]

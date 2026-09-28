@@ -1,4 +1,4 @@
-"""tmstore.py -- where CrystalMaster reaches OpenLobby's storage layer.
+"""tmstore.py -- where HippaulMaster reaches OpenLobby's storage layer.
 
 Tetra Master keeps two kinds of state outside the process that made it:
 
@@ -26,14 +26,14 @@ Finding polcore:
 Migrations are services/tm_migrations/NNNN_name.sql, applied with
 `polcore.db.migrate(directory=...)`. They share OpenLobby's schema_migrations
 table, which is keyed by the version number alone, so each repository owns a
-range: CrystalMaster numbers its files 3001..3999, and every table it creates
+range: HippaulMaster numbers its files 3001..3999, and every table it creates
 starts with `tm_`. A version number that appears in two sets would be taken as
 already applied by whichever set ran second.
 
 Every live key starts with `tm:` (below polcore.kv's own POL_KV_PREFIX).
 
     python tmstore.py migrate     apply what is pending (uses POL_DATABASE_URL)
-    python tmstore.py status      list CrystalMaster's migrations and their state
+    python tmstore.py status      list HippaulMaster's migrations and their state
     python tmstore.py import event_state FILE [--merge] [--dry-run]
     python tmstore.py import champion FILE [--merge] [--dry-run]
     python tmstore.py import board_state FILE|DIR [--merge] [--dry-run]
@@ -59,7 +59,7 @@ import threading
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-#: CrystalMaster's migration files. Versions 3001..3999 are this repository's.
+#: HippaulMaster's migration files. Versions 3001..3999 are this repository's.
 MIGRATIONS_DIR = os.path.join(_HERE, "tm_migrations")
 
 #: The prefix of every live key this repository writes.
@@ -122,7 +122,7 @@ def errors():
 
 
 def ensure_schema(log=None):
-    """Apply CrystalMaster's pending migrations, once per process and database.
+    """Apply HippaulMaster's pending migrations, once per process and database.
 
     Cheap after the first call. Raises what `polcore.db.migrate` raises when
     the database cannot be reached, and remembers nothing then, so the next
@@ -451,7 +451,7 @@ def import_source(store, path, merge=False, dry_run=False, out=print):
         ensure_schema(log=lambda msg: out("  " + msg))
     status = None
     try:
-        with db.transaction(lock="crystalmaster.import") as conn:
+        with db.transaction(lock="hippaulmaster.import") as conn:
             for p in plans:
                 p.exists = conn.execute("SELECT to_regclass(%s) IS NOT NULL AS ok",
                                         (p.table,)).fetchone()["ok"]

@@ -1,4 +1,4 @@
-# CrystalMaster
+# HippaulMaster
 
 A server reimplementation for Square Enix's Tetra Master, the online card game
 of the PlayOnline service (2002-2010). Together with the OpenLobby core it
@@ -26,6 +26,9 @@ job, and an optional live board.
 
 ## Prerequisites
 
+- This repository checked out as `hippaulmaster`, which is where the compose files
+  look for it (`git clone https://github.com/PrettyOpenLobby/HippaulMaster.git hippaulmaster`).
+  A checkout from before the rename, still named `crystalmaster`, needs renaming.
 - The OpenLobby core, checked out beside this repository and already built
   once (`docker compose up -d --build` in that checkout)
 - A Tetra Master client install of your own (the PlayOnline Viewer's
@@ -56,7 +59,7 @@ repository (so a Japanese install still gets English card names on the
 board and in notices); the tables do not.
 
 Step 2 rebuilds the core's `login` and `authsess` containers from the
-`crystalmaster` image (the core image plus this title) and starts the
+`hippaulmaster` image (the core image plus this title) and starts the
 `tmrank` job. The long command is the price of running inside the core's
 project; put it in a shell alias, or set `COMPOSE_FILE` and
 `COMPOSE_PROJECT_NAME` in your environment. To take the title out again,
@@ -94,7 +97,7 @@ nothing to import: a server that never ran a tournament has no
 
 ### Without building
 
-The image is published to `ghcr.io/prettyopenlobby/crystalmaster` on every push,
+The image is published to `ghcr.io/prettyopenlobby/hippaulmaster` on every push,
 layered on the published OpenLobby image. Apply the pull-only overrides of
 both repositories after their compose files, from this directory:
 
@@ -102,7 +105,9 @@ both repositories after their compose files, from this directory:
 docker compose --project-directory ../openlobby     -f ../openlobby/docker-compose.yml -f ../openlobby/docker-compose.ghcr.yml     -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
 
-`CRYSTALMASTER_TAG` and `OPENLOBBY_TAG` pick the versions (default `latest`).
+`HIPPAULMASTER_TAG` and `OPENLOBBY_TAG` pick the versions (default `latest`).
+`CRYSTALMASTER_TAG`, the name from before the rename, is still read when
+`HIPPAULMASTER_TAG` is unset.
 
 ## Pointing a client at it
 

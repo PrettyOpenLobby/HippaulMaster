@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          path: crystalmaster
+          path: hippaulmaster
       - uses: actions/checkout@v4
         with:
           repository: PrettyOpenLobby/OpenLobby
@@ -34,6 +34,6 @@ jobs:
       # Valkey containers (Docker is on the runner), and must not skip here
       - run: pip install pyyaml pycryptodome pillow "psycopg[binary]" psycopg-pool valkey
       - run: python tools/tm_run_all.py
-        working-directory: crystalmaster
+        working-directory: hippaulmaster
         env:
           POL_TEST_REQUIRE_DB: "1"
