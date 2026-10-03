@@ -88,7 +88,8 @@ def _tm_template_blob(path):
     if path in ("b/g/TM0EventList", "b/g/TM0EventDataList", "b/g/TM0EventMemberList"):
         # The tournament members (POL_TM_EVENT_ZONE_MEMBERS) also get the DATA
         # list: the event room loader needs its count >= 1 (+0x54) and the
-        # fixture carries exactly one record.
+        # fixture's count + record 0 +0x20 are the chocobo track (tmevent
+        # TRACK_LAYOUTS -- a count the client has no track for crashes it).
         if not events._tm_event_active() and not (
                 path == "b/g/TM0EventDataList" and events._tm_event_test_member()):
             return None

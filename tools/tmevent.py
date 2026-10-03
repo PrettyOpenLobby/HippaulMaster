@@ -77,10 +77,23 @@ import struct
 #: 7 or 8 bytes with a Shift-JIS-safe cut (0x9F640), and record 0's +0x20 is read
 #: as the divisor [scene+0x141C] in one arm of the entry gate -- so it must not
 #: be zero if that arm is ever taken.
+#:
+#: THE COUNT AND RECORD 0's +0x20 ARE THE CHOCOBO TRACK. Read off the unpacked
+#: PC TM.dll in the 2026-10-03 cup crash dump: the tournament scene's init
+#: (RVA 0x728FD) picks the track's icon table from (count, record 0 +0x20) --
+#: count 2 needs 4..8, count 3 needs 1..5, count 4 needs 1..4 (tables at
+#: RVA 0x221FF0/0x221ED4/0x221DF8, each count*sub positions long), an
+#: out-of-range +0x20 stores NULL, and ANY OTHER COUNT LEAVES THE POINTER
+#: UNINITIALISED. The row painter (RVA 0x72FC6) dereferences it as soon as a
+#: player's steps are non-zero, so count 1 crashed every PC on the tournament
+#: screen the moment the first game of the cup paid out steps (AV in TM.dll,
+#: pointer = leftover heap text). The record names label the track's groups
+#: (RVA 0x7818D copies `count` of them, 8 bytes each).
 DATA_SIZE = 0x1308
 DATA_COUNT_OFF = 0x54
 DATA_REC_OFF = 0x60
 DATA_REC_STRIDE = 0x28
+TRACK_LAYOUTS = {2: range(4, 9), 3: range(1, 6), 4: range(1, 5)}
 
 #: `b/g/TM0EventMemberList` -- reader 0x8C700, buffer 0x2923C8, size arg 0x2808.
 #: Count at +0x04, records from +0x08, stride 0x28, and 8 + 256*0x28 == 0x2808
@@ -202,6 +215,10 @@ def build_data(entries):
     blob = bytearray(DATA_SIZE)
     if len(entries) * DATA_REC_STRIDE + DATA_REC_OFF > DATA_SIZE:
         raise ValueError("too many event-data records for a %d-byte file" % DATA_SIZE)
+    if not entries or entries[0][1] not in TRACK_LAYOUTS.get(len(entries), ()):
+        raise ValueError("no chocobo track for %d record(s) with +0x20=%s; the "
+                         "client crashes on it (see TRACK_LAYOUTS)"
+                         % (len(entries), entries[0][1] if entries else None))
     struct.pack_into("<i", blob, DATA_COUNT_OFF, len(entries))
     for i, (name, divisor) in enumerate(entries):
         off = DATA_REC_OFF + i * DATA_REC_STRIDE
@@ -271,7 +288,8 @@ def dump_data(blob):
 #: server, POL_TM_EVENT_MEMBERS -- see services/tmfixtures.py).
 DEFAULT_WINNER = 0
 
-DEFAULT_DATA = [("EVENT", 1)]
+#: Two groups of eight: the longest track the client has (16 steps).
+DEFAULT_DATA = [("STAGE 1", 8), ("STAGE 2", 8)]
 
 #: One candidate active event. key2 is now MEASURED, not guessed: a live memory
 #: read of global 0x5245324 (RVA 0x2B5324) returned "Mermaids' Dreamworld" -- the
