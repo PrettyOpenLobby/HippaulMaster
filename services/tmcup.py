@@ -189,17 +189,60 @@ def event_prizes(info=None):
 def event_phase(now=None):
     """('pending' | 'running' | 'over' | 'closed', start, end).
 
-    over = time is up, games still finishing (POL_TM_EVENT_SETTLE seconds,
-    default 180); closed = results final, rankings and prizes open."""
+    over = time is up and a tournament game is still being played; closed =
+    results final, rankings and prizes open. Over lasts only while a game is
+    live (games_live, written by the game server), capped at
+    POL_TM_EVENT_SETTLE seconds (default 180): a fixed 3 minutes kept every
+    client on "Tallying tournament results... Retry/Exit" when nothing was
+    left to tally (live, 2026-10-03)."""
     now = time.time() if now is None else now
     start, end = event_window(now)
     if now < start:
         return "pending", start, end
     if now < end:
         return "running", start, end
-    if now < end + max(0, _env_int("POL_TM_EVENT_SETTLE", 180)):
+    if now < end + max(0, _env_int("POL_TM_EVENT_SETTLE", 180)) and games_live(end, now):
         return "over", start, end
     return "closed", start, end
+
+
+#: Tournament games being played now, written by the game server (Valkey
+#: `tm:event-games-live`): {"end": that event's end, "n": count, "at": time}.
+_GAMES_LIVE_TTL = 900
+_GAMES_CACHE = [0.0, None]
+
+
+def games_live_key():
+    return os.environ.get("POL_TM_EVENT_GAMES_KEY", "tm:event-games-live")
+
+
+def note_games_live(event_end, n, now=None):
+    try:
+        import tmstore
+        tmstore.kv.set_json(games_live_key(), {"end": int(event_end), "n": int(n),
+                                                "at": time.time() if now is None else now},
+                            ttl=_GAMES_LIVE_TTL)
+        _GAMES_CACHE[0] = 0.0
+    except Exception:                                        # noqa: BLE001
+        pass
+
+
+def games_live(event_end, now=None):
+    """True while a game of the event ending at `event_end` is still live.
+    Unknown (no record, store down) counts as live, so the cap decides --
+    never close early on missing data."""
+    now = time.time() if now is None else now
+    if now - _GAMES_CACHE[0] > 2.0:
+        try:
+            import tmstore
+            _GAMES_CACHE[1] = tmstore.kv.get_json(games_live_key())
+        except Exception:                                    # noqa: BLE001
+            _GAMES_CACHE[1] = None
+        _GAMES_CACHE[0] = now
+    d = _GAMES_CACHE[1]
+    if not isinstance(d, dict) or int(d.get("end", -1)) != int(event_end):
+        return True
+    return int(d.get("n", 1)) > 0
 
 
 #: The tournament's latest moment, written by the game server and read by the

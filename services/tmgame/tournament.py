@@ -127,6 +127,8 @@ def event_tick(member_id):
         return
     _event_phase_push(member_id)
     _ticker_countdown_tick()
+    if event_phase()[0] == "over":
+        _publish_games_live(force=False)
     st = _EVENT_STATUS.get(member_id)
     if st is None:
         _event_seed(member_id)
@@ -295,6 +297,7 @@ def _event_start_failed(m, member_id):
                 "playing -- the start FAILED, released%s"
                 % (m["index"], member_id,
                    (" (waiting on %s)" % left) if left else ""))
+    _publish_games_live()
 
 
 def _event_present(room):
@@ -322,12 +325,31 @@ def event_left_room(member_id):
 _EVENT_TABLE_USED = {}
 
 
+_GAMES_PUBLISHED = [0.0]
+
+
+def _publish_games_live(force=True):
+    """Tell both processes how many tournament games are live (tmcup
+    games_live): the results close as soon as this reaches 0 after time-up."""
+    now = time.time()
+    if not force and now - _GAMES_PUBLISHED[0] < 2.0:
+        return
+    _GAMES_PUBLISHED[0] = now
+    try:
+        import tmcup
+        live = {id(m) for m in _EVENT_MATCH.values() if m.get("started")}
+        tmcup.note_games_live(event_window()[1], len(live), now)
+    except Exception:                                        # noqa: BLE001
+        pass
+
+
 def _event_match_clear(m, why):
     _EVENT_TABLE_USED[m["index"]] = time.time()
     for mid in m["who"]:
         if _EVENT_MATCH.get(mid) is m:
             _EVENT_MATCH.pop(mid, None)
     common._say("tm: event match at table %d cleared (%s)" % (m["index"], why))
+    _publish_games_live()
 
 
 def _event_match_release(m, member_id):
@@ -345,6 +367,7 @@ def _event_match_release(m, member_id):
     left = [mid for mid in m["who"] if _EVENT_MATCH.get(mid) is m]
     common._say("tm: event match at table %d: member %s back in the room%s"
          % (m["index"], member_id, (" -- waiting on %s" % left) if left else " -- match over"))
+    _publish_games_live()
 
 
 #: member -> table index of a match they were told was called off, so a late
@@ -487,6 +510,7 @@ def _event_match_answer(member_id, ans, tblno=None):
         return None
     m["started"] = True
     m["t_start"] = time.time()
+    _publish_games_live()
     start = protocol.encode_code(matchmaking.MATCH_START_CODE) + b"@MuchMake=/Start=1"
     common._say("tm: event match table %d: everyone accepted -- (0xD2,1) "
          "@MuchMake=/Start=1" % m["index"])
