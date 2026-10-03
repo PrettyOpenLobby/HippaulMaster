@@ -455,19 +455,27 @@ def _event_try_pair(room):
     # "Could not start game" on both clients right after @GameEA -- they read
     # the table's leftover state from the game before; matches on a rested
     # table started every time.
-    free = sorted((i for i in range(1, 17) if i not in busy),
+    # ONLY TABLES THE CLIENT'S PTL LISTS, UNDER THE ID IT LISTS THEM BY.
+    # 2026-10-03 (TM.dll, the @PLAYACK arm at RVA 0x86AC9): after a positive
+    # @PLAYACK the client looks the offered TblId up in its PTL table array
+    # (0x28BB70) and writes that table's 0x34-byte slot at 0x28EF78 + i*0x34
+    # with state 2. Not found -> i = -1 -> it writes 0x34 bytes BEFORE the
+    # array: 2 into the global at 0x28EF74 (the "/Dm=" every later message
+    # carries) and junk over 0x28EF44..0x28EF68 -- and the player's NEXT
+    # seating never sends @CheckJoinTable ("Could not start game" after every
+    # finished game). We offered the raw fixture id 0x21_0000n00n while the
+    # live PTL publishes canonical_table_id(n-1, room) (0xB62DC881_...), and
+    # rows from #TM0T005 on are event-host copies (ptl._PTL_EVENT_HOST_FROM),
+    # so no offered table was ever in the client's list.
+    ntables = max(1, min(16, common._env_int("POL_TM_EVENT_TABLES", 4)))
+    free = sorted((i for i in range(1, ntables + 1) if i not in busy),
                   key=lambda i: (_EVENT_TABLE_USED.get(i, 0.0), i))
     index, tblid = None, 0
     for i in free:
-        row = None
         try:
             import tmroom
-            row = tmroom.fixture_table(i)
+            tblid = tmroom.canonical_table_id(i - 1, room)
         except Exception:
-            row = None
-        try:
-            tblid = int((row[2] if row and len(row) > 2 else "0") or "0", 16)
-        except ValueError:
             tblid = 0
         if tblid:
             index = i
