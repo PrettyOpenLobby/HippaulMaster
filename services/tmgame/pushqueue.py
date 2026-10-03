@@ -75,6 +75,34 @@ def _drop_stale_match_pushes(member_id, why):
     return dropped
 
 
+def _drop_pushes_with_code(member_id, code, why):
+    """Forget every push still queued for this member whose E-body code is
+    `code` (header byte 0). Returns how many were dropped."""
+    key = _push_key(member_id)
+    if key is None:
+        return 0
+    dropped = 0
+    with _PUSH_LOCK:
+        keep = []
+        for entry in _PUSHES.get(key) or []:
+            try:
+                same = bytes.fromhex(bytes(entry[1][:2]).decode("ascii"))[0] == code
+            except (ValueError, TypeError, IndexError, UnicodeDecodeError):
+                same = False
+            if same:
+                dropped += 1
+            else:
+                keep.append(entry)
+        if keep:
+            _PUSHES[key] = keep
+        else:
+            _PUSHES.pop(key, None)
+    if dropped:
+        common._say("tm: member %s -- dropped %d queued code-0x%02X push(es) (%s)"
+                    % (member_id, dropped, code, why))
+    return dropped
+
+
 def _queue_push(member_id, body, why="", after=0, peer=None, source=None):
     """Hand one E-body to a later reply this member draws.
 

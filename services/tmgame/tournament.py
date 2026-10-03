@@ -451,6 +451,13 @@ def _event_try_pair(room):
          "ans": set(), "t": now, "started": False, "playing": False}
     for mid in who:
         _EVENT_MATCH[mid] = m
+        # NO TICKER PAGES DURING SEATING. Pages queued after the last game
+        # result trickle out one per reply, and one rode the table's @GameEA
+        # reply (2026-10-03 15:10:24, narration log): the client queued Pong +
+        # @CheckJoinTable, wrote only the Pong, and said "Could not start
+        # game". That is why a FRESH client always started and every start
+        # after a finished game failed. The ticker is re-sent on return.
+        pushqueue._drop_pushes_with_code(mid, 0xD7, "matched -- no ticker during seating")
     body = (protocol.encode_code(matchmaking.MATCH_PUSH_CODE)
             + b"@MuchMake=/TblNo=%d/TblId=%016X" % (index, tblid))
     common._say("tm: EVENT MATCH -- members %s at table %d (TblId %016X); pushing "
@@ -751,6 +758,8 @@ def _ticker_audience(room=None):
         if room is not None and st and st[1] != room:
             continue
         if st and st[0] == "B":            # in a game: they get it on return
+            continue
+        if mid in _EVENT_MATCH:            # matched / seating: see _event_try_pair
             continue
         present = _event_present(st[1]) if st else None
         if present is not None and str(mid) not in present:
