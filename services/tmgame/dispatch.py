@@ -1314,9 +1314,17 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
                 # both event players' @Req= took this branch, and the COM board,
                 # @Quit and @GameEA=/Exit=1 rode alongside @EventGameInit ->
                 # "Could not start game".
+                # NOR IS A SPECTATOR'S. 2026-10-03: a player walking up to watch
+                # a live tournament game sent this same bare @Req= to that
+                # table's peer, got a COM board + @GameEA=/Exit=1 queued, and
+                # the @Data=/Watch= that followed found that fake COM game
+                # instead of the match: they hung on loading.
+                _wt = matchmaking._peer_table(peer_nick)
+                _watching = _wt[1] is not None and _wt in boardrules._MATCH_TURN
                 _bare = (_rk is not None and not vscom._COM_GAME.get(_rk)
                          and not matchmaking._MATCH_ROSTER.get(_rk)
                          and not tournament._in_event_match(member_id)
+                         and not _watching
                          and not reservation._is_seated_here(member_id, peer_nick))
             except Exception as _exc:
                 _bare, _rk = False, None
