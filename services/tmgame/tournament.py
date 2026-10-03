@@ -250,6 +250,7 @@ _EVENT_START_TTL = 120.0
 
 def _event_start_failed(m, member_id):
     _EVENT_FAILED[frozenset(m["who"])] = time.time()
+    _EVENT_TABLE_USED[m["index"]] = time.time()
     if _EVENT_MATCH.get(member_id) is m:
         _EVENT_MATCH.pop(member_id, None)
     left = [mid for mid in m["who"] if _EVENT_MATCH.get(mid) is m]
@@ -279,7 +280,13 @@ def event_left_room(member_id):
         _event_match_decline(m, member_id, "left the room")
 
 
+#: table index -> when a match last used it (paired, ended or failed); pairing
+#: takes the least recently used free table.
+_EVENT_TABLE_USED = {}
+
+
 def _event_match_clear(m, why):
+    _EVENT_TABLE_USED[m["index"]] = time.time()
     for mid in m["who"]:
         if _EVENT_MATCH.get(mid) is m:
             _EVENT_MATCH.pop(mid, None)
@@ -295,6 +302,7 @@ def _event_match_release(m, member_id):
     with no timeout (the PC's 80% bar). Measured on a test host 2026-09-26: the
     second player's @Ready= came 4 s after the first had gone back.
     """
+    _EVENT_TABLE_USED[m["index"]] = time.time()
     if _EVENT_MATCH.get(member_id) is m:
         _EVENT_MATCH.pop(member_id, None)
     left = [mid for mid in m["who"] if _EVENT_MATCH.get(mid) is m]
@@ -340,23 +348,34 @@ def _event_try_pair(room):
     pairs = [[a, b] for i, a in enumerate(ready) for b in ready[i + 1:]]
     who = next((p for p in pairs if frozenset(p) not in _EVENT_FAILED), pairs[0])
     busy = {m["index"] for m in _EVENT_MATCH.values() if m["room"] == room}
-    index = next((i for i in range(1, 17) if i not in busy), None)
-    if index is None:
-        return
-    row = None
-    try:
-        import tmroom
-        row = tmroom.fixture_table(index)
-    except Exception:
+    # LEAST RECENTLY USED TABLE, not the lowest free one. 2026-10-03 cup: every
+    # match put on table 1 within ~20 s of a game there ending (02:05, 02:22,
+    # 02:53, and 02:38 over seat state that outlived a restart) died with
+    # "Could not start game" on both clients right after @GameEA -- they read
+    # the table's leftover state from the game before; matches on a rested
+    # table started every time.
+    free = sorted((i for i in range(1, 17) if i not in busy),
+                  key=lambda i: (_EVENT_TABLE_USED.get(i, 0.0), i))
+    index, tblid = None, 0
+    for i in free:
         row = None
-    try:
-        tblid = int((row[2] if row and len(row) > 2 else "0") or "0", 16)
-    except ValueError:
-        tblid = 0
-    if not tblid:
-        common._say("tm: event pair %s NOT matched -- no fixture row for table %d"
-             % (who, index))
+        try:
+            import tmroom
+            row = tmroom.fixture_table(i)
+        except Exception:
+            row = None
+        try:
+            tblid = int((row[2] if row and len(row) > 2 else "0") or "0", 16)
+        except ValueError:
+            tblid = 0
+        if tblid:
+            index = i
+            break
+    if index is None:
+        common._say("tm: event pair %s NOT matched -- no free table with a fixture row"
+             % (who,))
         return
+    _EVENT_TABLE_USED[index] = now
     m = {"who": who, "room": room, "index": index, "tblid": tblid,
          "ans": set(), "t": now, "started": False, "playing": False}
     for mid in who:

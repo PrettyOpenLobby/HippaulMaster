@@ -58,6 +58,7 @@ def reset():
     tournament._EVENT_MATCH.clear()
     tournament._EVENT_STATUS.clear()
     tournament._EVENT_FAILED.clear()
+    tournament._EVENT_TABLE_USED.clear()
 
 
 def main():
@@ -108,6 +109,22 @@ def main():
     tournament._EVENT_FAILED[frozenset([3, 52])] = time.time()
     tournament._event_try_pair(ROOM)
     check(3 in tournament._EVENT_MATCH, "...but with nobody else, the same pair is tried again")
+
+    # 02:52:47 a game at table 1 ended; 02:53:07 the next pair went straight
+    # back onto table 1 and both clients said "Could not start game".
+    reset()
+    m = started([52, 64])
+    status(52, "E"); status(64, "E"); status(52, "B"); status(64, "B")
+    status(52, "A"); status(64, "A")
+    check(not tournament._EVENT_MATCH, "the 02:52 game ends and both are released")
+    for mid in (52, 64):
+        tournament._EVENT_STATUS[mid] = ("A", ROOM, old)
+    tournament._EVENT_FAILED.clear()
+    tournament._event_try_pair(ROOM)
+    nxt = tournament._EVENT_MATCH.get(52)
+    check(nxt is not None and nxt["index"] != 1,
+          "the next match goes to a rested table, not straight back to table 1",
+          "table %s" % (nxt and nxt["index"]))
 
     print()
     if FAILS:
