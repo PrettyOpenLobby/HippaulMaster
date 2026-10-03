@@ -2409,8 +2409,13 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
         m = re.search(rb"/Ans=(-?\d+)", cmd)
         common._say("tm: member %s ANSWERED THE MATCH PUSH -- @MuchMakeAns=/Ans=%s"
              % (member_id, m.group(1).decode() if m else "?"))
+        _tn = re.search(rb"/TblNo=(\d+)", cmd)
+        _tn = int(_tn.group(1)) if _tn else None
+        _ans = int(m.group(1)) if m else 0
         if member_id in tournament._EVENT_MATCH:
-            return tournament._event_match_answer(member_id, int(m.group(1)) if m else 0)
+            return tournament._event_match_answer(member_id, _ans, _tn)
+        if tournament._event_test_member(member_id):
+            return tournament.event_stale_answer(member_id, _ans, _tn)
         return None
 
     if b"@CheckJoinTable=" in cmd:

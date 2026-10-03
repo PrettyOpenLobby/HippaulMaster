@@ -347,20 +347,54 @@ def _event_match_release(m, member_id):
          % (m["index"], member_id, (" -- waiting on %s" % left) if left else " -- match over"))
 
 
+#: member -> table index of a match they were told was called off, so a late
+#: answer to that same offer is not called off a second time (a spare queued
+#: /Start=-1 would cancel their NEXT match).
+_EVENT_CALLED_OFF = {}
+
+
+def _event_call_off_body():
+    return protocol.encode_code(matchmaking.MATCH_START_CODE) + b"@MuchMake=/Start=-1"
+
+
 def _event_match_decline(m, member_id, why):
     if m.get("started"):
         return
+    # EVERY other player who was offered it, not only those who already
+    # answered: 2026-10-03 05:00 the one who had not answered yet accepted the
+    # dead offer a second later, never heard it was off, and walked to table 1
+    # while the re-pair sent the other to table 2 (black screen, both alone).
     for mid in m["who"]:
-        if mid != member_id and mid in m["ans"]:
-            pushqueue._queue_push(mid, protocol.encode_code(matchmaking.MATCH_START_CODE) + b"@MuchMake=/Start=-1",
-                        "event match called off")
+        if mid != member_id:
+            _EVENT_CALLED_OFF[mid] = m["index"]
+            pushqueue._queue_push(mid, _event_call_off_body(), "event match called off")
     _event_match_clear(m, "member %s: %s" % (member_id, why))
 
 
+def event_stale_answer(member_id, ans, tblno):
+    """@MuchMakeAns= for a match this member is no longer in (or another
+    table): the body to send back, or None. An accept gets a call-off unless
+    that offer's call-off was already pushed."""
+    if ans != 1:
+        return None
+    if tblno is not None and _EVENT_CALLED_OFF.get(member_id) == tblno:
+        _EVENT_CALLED_OFF.pop(member_id, None)
+        return None
+    common._say("tm: member %s accepted a match that is gone (table %s) -- calling it off"
+                % (member_id, tblno))
+    return _event_call_off_body()
+
+
 def _event_try_pair(room):
-    if room is None or event_phase()[0] != "running":
+    ph, ws, _we = event_phase()
+    if room is None or ph != "running":
         return
     now = time.time()
+    # Not in the first moments of the event: 05:00:00 the first offer went out
+    # in the same instant as the "games begin" push and a client declined it
+    # on its own (/Ans=0) while it was still handling the start.
+    if now - ws < _event_grace():
+        return
     for mid, m in list(_EVENT_MATCH.items()):
         if not m.get("started") and now - m["t"] > _EVENT_MATCH_TTL:
             _event_match_decline(m, None, "nobody answered in %ds"
@@ -425,12 +459,16 @@ def _event_try_pair(room):
         pushqueue._queue_push(mid, body, "event match at table %d" % index)
 
 
-def _event_match_answer(member_id, ans):
+def _event_match_answer(member_id, ans, tblno=None):
     """@MuchMakeAns= from a matched player -> the (0xD2,1) start or the call-off.
     Returns the body to send straight back to this member, or None."""
     m = _EVENT_MATCH.get(member_id)
     if m is None:
-        return None
+        return event_stale_answer(member_id, ans, tblno)
+    if tblno is not None and tblno != m["index"]:
+        # An answer to an OLDER offer (another table) must not count for this
+        # match: 05:00 the server took a table-1 accept as the table-2 one.
+        return event_stale_answer(member_id, ans, tblno)
     if ans != 1:
         _event_match_decline(m, member_id, "declined (/Ans=%d)" % ans)
         return None
