@@ -225,9 +225,38 @@ def note_event_status(member_id, values):
             m["playing"] = True
         elif letter == "A" and m.get("playing"):
             _event_match_release(m, member_id)
+        elif letter == "E" and m.get("started"):
+            m.setdefault("entered", set()).add(member_id)
+        elif (letter == "A" and m.get("started")
+              and member_id in m.get("entered", ())):
+            # THE START BOUNCED: accepted, went to the table ('E'), back in the
+            # room without ever playing ('B'). The 2026-10-03 cup's "Could not
+            # start game" (twice, 02:22 and 02:38): a started match is never
+            # declined or expired, so both players were unpairable until the
+            # next restart.
+            _event_start_failed(m, member_id)
         elif letter == "C":
             _event_match_decline(m, member_id, "reservation turned off")
     _event_try_pair(room)
+
+
+#: frozenset(pair) -> when its start bounced; that pair is not re-paired for
+#: _EVENT_FAILED_HOLD while anyone else could be matched instead.
+_EVENT_FAILED = {}
+_EVENT_FAILED_HOLD = 300.0
+#: a started match that never reaches 'B' is cleared after this
+_EVENT_START_TTL = 120.0
+
+
+def _event_start_failed(m, member_id):
+    _EVENT_FAILED[frozenset(m["who"])] = time.time()
+    if _EVENT_MATCH.get(member_id) is m:
+        _EVENT_MATCH.pop(member_id, None)
+    left = [mid for mid in m["who"] if _EVENT_MATCH.get(mid) is m]
+    common._say("tm: event match at table %d: member %s came back without "
+                "playing -- the start FAILED, released%s"
+                % (m["index"], member_id,
+                   (" (waiting on %s)" % left) if left else ""))
 
 
 def _event_present(room):
@@ -291,6 +320,12 @@ def _event_try_pair(room):
         if not m.get("started") and now - m["t"] > _EVENT_MATCH_TTL:
             _event_match_decline(m, None, "nobody answered in %ds"
                                  % _EVENT_MATCH_TTL)
+        elif (m.get("started") and not m.get("playing")
+              and now - m.get("t_start", m["t"]) > _EVENT_START_TTL
+              and _EVENT_MATCH.get(mid) is m):
+            _EVENT_FAILED[frozenset(m["who"])] = now
+            _event_match_clear(m, "started %ds ago and never played"
+                               % _EVENT_START_TTL)
     grace = _event_grace()
     present = _event_present(room)
     ready = sorted(mid for mid, (letter, r, t) in _EVENT_STATUS.items()
@@ -299,7 +334,11 @@ def _event_try_pair(room):
                    and grace <= now - t < 3600)
     if len(ready) < 2:
         return
-    who = ready[:2]
+    for k, t in list(_EVENT_FAILED.items()):
+        if now - t > _EVENT_FAILED_HOLD:
+            _EVENT_FAILED.pop(k, None)
+    pairs = [[a, b] for i, a in enumerate(ready) for b in ready[i + 1:]]
+    who = next((p for p in pairs if frozenset(p) not in _EVENT_FAILED), pairs[0])
     busy = {m["index"] for m in _EVENT_MATCH.values() if m["room"] == room}
     index = next((i for i in range(1, 17) if i not in busy), None)
     if index is None:
@@ -346,6 +385,7 @@ def _event_match_answer(member_id, ans):
                 ", ".join(str(x) for x in set(m["who"]) - m["ans"])))
         return None
     m["started"] = True
+    m["t_start"] = time.time()
     start = protocol.encode_code(matchmaking.MATCH_START_CODE) + b"@MuchMake=/Start=1"
     common._say("tm: event match table %d: everyone accepted -- (0xD2,1) "
          "@MuchMake=/Start=1" % m["index"])
