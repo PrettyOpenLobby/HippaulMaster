@@ -5,24 +5,25 @@ import os
 import random
 import time
 from .deps import tmprize, tmroll, tmsave
-from . import boardrules, collection, common, matchend, pushqueue, savefile, vscom
+from . import boardrules, collection, comai, common, matchend, pushqueue, savefile, vscom
 
 
 def _com_elo(char_index):
-    """A COM opponent's fixed Elo: the rung of the deck this server deals it
-    (`_com_deck_record`; the ladder's level bands rise), spread evenly from
+    """A COM opponent's fixed Elo: where it sits between the weakest and the
+    strongest opponent (`comai._strength_frac`: its PlPrm.BIN average rank,
+    or the rung of its deck when that table is missing), spread evenly from
     `POL_TM_ELO_COM_LO` to `POL_TM_ELO_COM_HI` (VS. Rating x100, default 150
-    and 275). A COM with no `/Com=` index sits at the middle."""
+    and 275). A COM with no `/Com=` index sits at the middle.
+
+    Until 2026-10-02 this was the deck rung alone, and the nine opponents
+    whose decks are off the 25..44 ladder (the two strongest among them)
+    all rated at the middle."""
     import tmrank as _tr
     lo = _tr._env_float("POL_TM_ELO_COM_LO", 150)
     hi = _tr._env_float("POL_TM_ELO_COM_HI", 275)
-    frac = 0.5
-    try:
-        ladder = vscom._com_deck_ladder()
-        if char_index is not None and len(ladder) > 1:
-            frac = ladder.index(vscom._com_deck_record(int(char_index))) / (len(ladder) - 1)
-    except (TypeError, ValueError):
-        pass
+    frac = comai._strength_frac(char_index)
+    if frac is None:
+        frac = 0.5
     return _tr.elo_of_display(lo + (hi - lo) * frac)
 
 

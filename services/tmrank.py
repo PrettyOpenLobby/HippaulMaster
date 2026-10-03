@@ -816,8 +816,8 @@ def tiled_games_of(blk):
 #
 # Kept internally in classic Elo points and shown on the client's scale: 1500
 # is 2.50, and every 4 points is 0.01, so 900..2100 spans 1.00..4.00 (the
-# display clamps; the points do not). A COM has a fixed rating by the rung of
-# the deck the server dealt it (tetramaster._com_elo), 1.50..2.75 by default.
+# display clamps; the points do not). A COM has a fixed rating by its average
+# rank in PlPrm.BIN (tetramaster._com_elo), 1.50..2.75 by default.
 
 ELO_ANCHOR = 1500.0
 ELO_ANCHOR_SHOWN = 250

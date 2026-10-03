@@ -398,6 +398,16 @@ def selftest(say=print):
                 say("FAIL: comai skill must climb 0 -> 1 with average rank, got %r"
                     % ["%.2f" % v for v in skills])
                 ok = False
+            # ...and the VS. Rating agrees: the strongest opponent rates at
+            # the top. The deck-rung rating put it at the middle, because its
+            # deck is off the ladder.
+            from . import careerstats
+            elos = [careerstats._com_elo(i) for i in by_rank]
+            if any(b < a for a, b in zip(elos, elos[1:])) or elos[-1] <= elos[0]                     or elos[-1] != max(careerstats._com_elo(i)
+                                       for i in range(1, len(table))):
+                say("FAIL: COM Elo must climb with average rank, got %r"
+                    % ["%.0f" % v for v in elos])
+                ok = False
         os.environ["POL_TM_COM_AI"] = "0"
         if skill_of(99) != 0.0:
             say("FAIL: POL_TM_COM_AI=0 must make every COM random")
