@@ -42,18 +42,29 @@ def main():
     check(len(blob) == tmevent.DATA_SIZE, "data list is the client's 0x1308 bytes", str(len(blob)))
 
     # The twin: the 10-03 file must be refused, or this check cannot fail.
-    for bad in ([("EVENT", 1)], [("A", 1), ("B", 1)], [("A", 4)] * 5, []):
+    for bad in ([("EVENT", 1)], [("A", 8), ("B", 8)], [("A", 4)] * 5, []):
         try:
             tmevent.build_data(bad)
             check(False, f"build_data refuses {bad!r}")
         except ValueError:
             check(True, f"build_data refuses {bad[:2]!r}{'...' if len(bad) > 2 else ''}")
-    for good in ([("A", 8), ("B", 8)], [("A", 1)] * 3, [("A", 4)] * 4):
+    for good in ([("A", 5)] * 3, [("A", 1)] * 3, [("A", 4)] * 4):
         try:
             tmevent.build_data(good)
             check(True, f"build_data accepts {len(good)} x +0x20={good[0][1]}")
         except ValueError as exc:
             check(False, f"build_data accepts {good!r}", str(exc))
+
+    # The prize pages show what is paid (tmcup.event_prizes), not zeros.
+    import tmcup
+    from tmplugin import events
+    pz = tmcup.event_prizes()
+    pages = events._tm_event_prizes(blob)
+    money = [struct.unpack_from("<i", pages, tmevent.PRIZE_OFF + i * tmevent.PRIZE_STRIDE + 8)[0]
+             for i in range(9)]
+    check(money[:3] == list(pz["money"]), "Top 3 pages show the paid money", str(money[:3]))
+    check(money[6:] == [pz["mission_money"]] * 3, "Mission pages show the paid money", str(money[6:]))
+    check(len(pages) == len(blob), "prize pages keep the file size")
 
     print("FAIL" if FAILS else "OK", f"({len(FAILS)} failing)")
     return 1 if FAILS else 0

@@ -87,13 +87,47 @@ import struct
 #: UNINITIALISED. The row painter (RVA 0x72FC6) dereferences it as soon as a
 #: player's steps are non-zero, so count 1 crashed every PC on the tournament
 #: screen the moment the first game of the cup paid out steps (AV in TM.dll,
-#: pointer = leftover heap text). The record names label the track's groups
-#: (RVA 0x7818D copies `count` of them, 8 bytes each).
+#: pointer = leftover heap text).
+#:
+#: THE RECORDS ARE THE CLASSES (rankings scene, same dump). RVA 0x7818D copies
+#: `count` names (8 bytes each); a player's Class is record (steps-1)/(+0x20)
+#: (RVA 0x78C5B; 0 steps shows a default); the three Class Prizes tabs are
+#: records 0-2 for count 3, 1-3 for count 4 (RVA 0x7825B). The scene handles
+#: ONLY counts 3 and 4: count 2 drew the track but the Class column fell back
+#: to the player's name and two tabs read unset slots (live, 2026-10-03), so
+#: count 2 is refused here even though its track table exists.
 DATA_SIZE = 0x1308
 DATA_COUNT_OFF = 0x54
 DATA_REC_OFF = 0x60
 DATA_REC_STRIDE = 0x28
-TRACK_LAYOUTS = {2: range(4, 9), 3: range(1, 6), 4: range(1, 5)}
+TRACK_LAYOUTS = {3: range(1, 6), 4: range(1, 5)}
+
+#: THE PRIZE PAGES (display only; HANDOFF-tm-event-host.md "+0x1100"): nine
+#: 0x38-byte records -- Top 3 (1st-3rd), Class (tabs 1-3), Missions 1-3. Each:
+#: +0x00 u8 flags (bit0 cards, bit1 money, bit2 special item), +0x02 u16 x3
+#: card ids (0xFFFF none), +0x08 s32 money, +0x10 char[0x28] special item text.
+PRIZE_OFF = 0x1100
+PRIZE_STRIDE = 0x38
+
+
+def build_prizes(blob, top_money, top_cards, class_money, mission_money):
+    """Write the nine prize-page records into a data-list blob."""
+    buf = bytearray(blob)
+    rows = ([(m, c) for m, c in zip(top_money, top_cards)]
+            + [(m, 0) for m in class_money] + [(mission_money, 0)] * 3)
+    for i, (money, cards) in enumerate(rows[:9]):
+        off = PRIZE_OFF + i * PRIZE_STRIDE
+        buf[off:off + PRIZE_STRIDE] = bytes(PRIZE_STRIDE)
+        flags = (2 if money else 0) | (4 if cards else 0)
+        struct.pack_into("<B", buf, off, flags)
+        struct.pack_into("<3H", buf, off + 2, 0xFFFF, 0xFFFF, 0xFFFF)
+        struct.pack_into("<i", buf, off + 8, int(money))
+        if cards:
+            # The cards are drawn when the prize is claimed, so the page
+            # cannot name them; say how many instead.
+            text = ("%d random card%s" % (cards, "" if cards == 1 else "s")).encode("ascii")
+            buf[off + 0x10:off + 0x10 + len(text)] = text
+    return bytes(buf)
 
 #: `b/g/TM0EventMemberList` -- reader 0x8C700, buffer 0x2923C8, size arg 0x2808.
 #: Count at +0x04, records from +0x08, stride 0x28, and 8 + 256*0x28 == 0x2808
@@ -288,8 +322,8 @@ def dump_data(blob):
 #: server, POL_TM_EVENT_MEMBERS -- see services/tmfixtures.py).
 DEFAULT_WINNER = 0
 
-#: Two groups of eight: the longest track the client has (16 steps).
-DEFAULT_DATA = [("STAGE 1", 8), ("STAGE 2", 8)]
+#: Three classes of five steps (a 15-step track). Names are cut to 7-8 bytes.
+DEFAULT_DATA = [("Bronze", 5), ("Silver", 5), ("Gold", 5)]
 
 #: One candidate active event. key2 is now MEASURED, not guessed: a live memory
 #: read of global 0x5245324 (RVA 0x2B5324) returned "Mermaids' Dreamworld" -- the

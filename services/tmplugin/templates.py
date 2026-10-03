@@ -95,7 +95,7 @@ def _tm_template_blob(path):
             return None
         data = tmfixtures.template(path)
         if data is not None and path == "b/g/TM0EventDataList"                 and events._tm_event_test_member():
-            data = events._tm_event_missions(data)
+            data = events._tm_event_prizes(events._tm_event_missions(data))
         return data
     if path == fetches._EXHIBIT_LIST_PATH:
         return None                         # per-member store only; no fixture
