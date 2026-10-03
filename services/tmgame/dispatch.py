@@ -1445,11 +1445,20 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
             except Exception as exc:
                 common._say("tm: WARNING: event deck for member %s NOT saved (%r)"
                      % (member_id, exc))
+        # ...AND THEN LET THEM IN. The card scene closes on the @Select (its
+        # state 10 polls msgid 7 first), but the entry helper behind it then
+        # sits in sub-state 5 (RVA 0xFCCD8) polling (0xB2, 0x17) with NO
+        # timeout: only an @EQuit from the same sender with the same shop byte
+        # moves it on (sub-state 6 -> 4 -> phase 5 -> the event room). Without
+        # it the first live pick (2026-10-03 01:58) left the player on
+        # "loading" for good. Route A sends the same @EQuit after @Event.
         common._say("tm: member %s picked the TOURNAMENT DECK: %s -- answering "
-             "(0xB2,7,shop %d) @Select=/A=0"
+             "(0xB2,7,shop %d) @Select=/A=0 + (0xB2,0x17) @EQuit to enter the room"
              % (member_id, ", ".join(r.split(b"|")[0].decode() for r in rows),
                 shop))
-        return protocol.encode_code(0xB2 | (7 << 16) | (shop << 24)) + b"@Select=/A=0"
+        return [protocol.encode_code(0xB2 | (7 << 16) | (shop << 24)) + b"@Select=/A=0",
+                protocol.encode_code(0xB2 | (0x17 << 16) | (shop << 24))
+                + b"@EQuit=/D=0/Stat=0"]
 
     if b"@CardSelect=" in cmd:
         # VERIFIED: THE HOST IS ON THE BOARD AND THIS IS WHAT IT ASKS NEXT. Measured
