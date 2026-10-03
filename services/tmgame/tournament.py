@@ -135,8 +135,42 @@ def event_tick(member_id):
         _event_try_pair(st[1])
 
 
-#: member -> the phase their client last heard (from the time answer or a push)
+#: member -> the phase their client last heard (from the time answer or a push).
+#: PERSISTED (Valkey, _SEEN_KEY): 2026-10-03 test cup, authsess restarted at
+#: 04:12 wiped this dict, the clients on the tournament screen never re-sent
+#: @EventTimeReq, so at 04:15 nobody was told the event ended and every client
+#: gave up with "could not exit the tournament correctly".
 _EVENT_SEEN = {}
+_SEEN_KEY = "tm:event-seen"
+_SEEN_LOADED = [False]
+
+
+def _seen_restore():
+    if _SEEN_LOADED[0]:
+        return
+    _SEEN_LOADED[0] = True
+    try:
+        import tmstore
+        for k, v in (tmstore.kv.get_json(_SEEN_KEY) or {}).items():
+            _EVENT_SEEN.setdefault(int(k), str(v))
+    except Exception as exc:                                    # noqa: BLE001
+        common._say("tm: tournament screen list not restored (%r)" % (exc,))
+
+
+def _seen_save():
+    try:
+        import tmstore
+        tmstore.kv.set_json(_SEEN_KEY, {str(k): v for k, v in _EVENT_SEEN.items()},
+                            ttl=12 * 3600)
+    except Exception:                                           # noqa: BLE001
+        pass
+
+
+def note_seen(member_id, phase):
+    """A member's client has heard `phase` (the time answer)."""
+    _seen_restore()
+    _EVENT_SEEN[member_id] = phase
+    _seen_save()
 
 
 def _event_time_push(kind):
@@ -156,6 +190,7 @@ def _event_time_push(kind):
 
 def _event_phase_push(member_id):
     """Tell a member on the tournament screen when the phase moves on."""
+    _seen_restore()
     seen = _EVENT_SEEN.get(member_id)
     if seen is None:
         return
@@ -174,8 +209,10 @@ def _event_phase_push(member_id):
         # A new window began (closed -> pending/running): their screen is the
         # old event; they re-enter to see the new one. Nothing to push.
         _EVENT_SEEN[member_id] = ph
+        _seen_save()
         return
     _EVENT_SEEN[member_id] = ph
+    _seen_save()
     for i, b in enumerate(bodies):
         pushqueue._queue_push(member_id, b, "tournament %s -> %s" % (seen, ph), after=i)
     common._say("tm: tournament phase %s -> %s for member %s (%d push(es))"
@@ -670,6 +707,7 @@ def _ticker_bodies(pages):
 def _ticker_audience(room=None):
     """Members on the tournament screen: heard the time answer, still present."""
     out = []
+    _seen_restore()
     for mid, ph in list(_EVENT_SEEN.items()):
         st = _EVENT_STATUS.get(mid)
         if room is not None and st and st[1] != room:

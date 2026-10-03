@@ -815,7 +815,7 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
                 start, end, now = -1, int(_we - _ws), int(_t - _ws)
             else:
                 start, end, now = -1, -1, 0
-            tournament._EVENT_SEEN[member_id] = _ph
+            tournament.note_seen(member_id, _ph)
             # ...AND LET THEM IN. The event loader (PC ctor 0x968D0) waits in
             # state 6, "Entering room..." at 90%, for `@EventEn` (code 0xD0,
             # reader 0x8CDF0; /Ans= must be > 0), after the <DE>/<DS> room
