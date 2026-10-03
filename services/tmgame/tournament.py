@@ -327,6 +327,9 @@ def event_left_room(member_id):
         _event_match_decline(m, member_id, "left the room")
 
 
+#: frozenset(pair) -> when that pair was last matched (fair pairing)
+_EVENT_LAST_MET = {}
+
 #: table index -> when a match last used it (paired, ended or failed); pairing
 #: takes the least recently used free table.
 _EVENT_TABLE_USED = {}
@@ -446,8 +449,18 @@ def _event_try_pair(room):
     for k, t in list(_EVENT_FAILED.items()):
         if now - t > _EVENT_FAILED_HOLD:
             _EVENT_FAILED.pop(k, None)
-    pairs = [[a, b] for i, a in enumerate(ready) for b in ready[i + 1:]]
-    who = next((p for p in pairs if frozenset(p) not in _EVENT_FAILED), pairs[0])
+    # FAIR PAIRING: the player who has waited longest goes first, against the
+    # opponent they have faced least recently (never = first); a pair whose
+    # start just failed comes last. It used to be the two LOWEST member ids,
+    # so with three players the same two were rematched every time they were
+    # both free and the third waited (live, 2026-10-03 17:11).
+    since = {mid: _EVENT_STATUS[mid][2] for mid in ready}
+    anchor = min(ready, key=lambda mid: (since[mid], mid))
+    rivals = sorted((mid for mid in ready if mid != anchor),
+                    key=lambda mid: (frozenset((anchor, mid)) in _EVENT_FAILED,
+                                     _EVENT_LAST_MET.get(frozenset((anchor, mid)), 0.0),
+                                     since[mid], mid))
+    who = sorted([anchor, rivals[0]])
     busy = {m["index"] for m in _EVENT_MATCH.values() if m["room"] == room}
     # LEAST RECENTLY USED TABLE, not the lowest free one. 2026-10-03 cup: every
     # match put on table 1 within ~20 s of a game there ending (02:05, 02:22,
@@ -485,6 +498,7 @@ def _event_try_pair(room):
              % (who,))
         return
     _EVENT_TABLE_USED[index] = now
+    _EVENT_LAST_MET[frozenset(who)] = now
     m = {"who": who, "room": room, "index": index, "tblid": tblid,
          "ans": set(), "t": now, "started": False, "playing": False}
     for mid in who:
