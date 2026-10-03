@@ -115,6 +115,13 @@ def _event_grace():
     return max(0, common._env_int("POL_TM_EVENT_MATCH_GRACE", 20))
 
 
+def forget_played_match(member_id):
+    """A fresh event entry: release this member from a match already played."""
+    m = _EVENT_MATCH.get(member_id)
+    if m is not None and m.get("playing"):
+        _event_match_release(m, member_id)
+
+
 def returning_from_game(member_id):
     """True when this member's tournament game has been played and they
     have not been released back to the room yet."""
@@ -711,6 +718,19 @@ def _event_score_game(roster, scores, chan=None, index=None):
 #: event. Amounts are OUR policy: POL_TM_EVENT_PRIZE_MONEY (1st,2nd,3rd),
 #: POL_TM_EVENT_MISSION_MONEY per cleared mission, POL_TM_EVENT_PRIZE_CARDS
 #: (cards for 1st,2nd,3rd) drawn from pack POL_TM_EVENT_PRIZE_PACK.
+def event_class_of(steps):
+    """0-based class index for `steps` (None for 0 steps), from the served
+    track layout: classes of `+0x20` steps each, the last one open-ended."""
+    if not steps or steps <= 0:
+        return None
+    try:
+        import tmevent
+        count, per = len(tmevent.DEFAULT_DATA), int(tmevent.DEFAULT_DATA[0][1])
+    except Exception:
+        count, per = 3, 5
+    return min(count - 1, (int(steps) - 1) // max(1, per))
+
+
 def _event_prize_lines(member_id):
     import tmeventstate
     ws = event_phase()[1]
@@ -752,7 +772,14 @@ def _event_prize_lines(member_id):
             cards = list(cardshop._shopbuy_cards(pz["pack"]))[:k]
         cleared = bin(int(row.get("missions", 0))).count("1")
         pm += cleared * event_prizes()["mission_money"]
-        why = ("rank %s, %d mission(s)" % (rank, cleared))
+        # CLASS PRIZE: the highest class reached (tmevent DEFAULT_DATA: the
+        # track's groups; class = (steps-1) // steps-per-class, as the rankings
+        # screen computes it at RVA 0x78C5B). The prize pages show these.
+        klass = event_class_of(my_steps)
+        if klass is not None:
+            pm += event_prizes()["class_money"][klass]
+        why = ("rank %s, %d mission(s), class %s" % (rank, cleared,
+                                                     "-" if klass is None else klass + 1))
         if pm or cards:
             purse._set_money(member_id, money_before + pm, "tournament prize: " + why)
             if pm:

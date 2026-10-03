@@ -55,7 +55,11 @@ def main():
         check(shop not in (None, 1), f"@EcmInit shop byte is not 1 (POL_TM_EVENT_PRIZE_SHOP={env})",
               f"header {hdr!r}")
         check(shop == n, "header shop byte matches /N=", f"sh={shop} /N={n}")
-        check(b"/PM=60000" in body and b"/C=3" in body, "prize body still carries the money and cards")
+        pz = T.event_prizes()
+        want = pz["money"][0] + 2 * pz["mission_money"] + pz["class_money"][1]   # 6 steps = Silver
+        check(b"/PM=%d" % want in body and b"/C=3" in body,
+              "prize body carries 1st + 2 missions + the Silver class prize, and the cards",
+              "want /PM=%d" % want)
 
     print()
     if FAILS:

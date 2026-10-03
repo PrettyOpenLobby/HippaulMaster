@@ -73,13 +73,14 @@ def _tm_event_missions(data):
 
 def _tm_event_prizes(data):
     """The prize pages show what tournament._event_prize_lines PAYS (tmcup
-    event_prizes). Unfilled, every page read 0 (live, 2026-10-03). No class
-    prizes are paid, so those pages say 0."""
+    event_prizes). Unfilled, every page read 0 (live, 2026-10-03). The class
+    pages show class_money, paid for the highest class reached."""
     try:
         import tmcup
         import tmevent
         pz = tmcup.event_prizes()
-        return tmevent.build_prizes(data, pz["money"], pz["cards"], (0, 0, 0),
+        return tmevent.build_prizes(data, pz["money"], pz["cards"],
+                                    pz.get("class_money") or (0, 0, 0),
                                     pz["mission_money"])
     except Exception as exc:
         corenames.log("lobby", f"  TM0EventDataList: prize pages not filled ({exc!r})")

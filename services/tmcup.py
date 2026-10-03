@@ -167,8 +167,9 @@ def event_missions(info=None):
 
 
 def event_prizes(info=None):
-    """money[3], cards[3], pack, mission_money for this event; POL_TM_EVENT_*
-    overrides win."""
+    """money[3], cards[3], pack, mission_money, class_money[3] for this event;
+    POL_TM_EVENT_* overrides win. The fallbacks are the 2026-10-03 scale (about
+    a tenth of the first cup's, which paid more than a career's earnings)."""
     info = info if info is not None else event_info()
     p = dict(info.get("prizes") or {})
 
@@ -179,11 +180,12 @@ def event_prizes(info=None):
             return [int(x) for x in vals][:3] + [0] * (3 - len(list(vals)[:3]))
         except (TypeError, ValueError):
             return list(default)
-    return {"money": ints("POL_TM_EVENT_PRIZE_MONEY", "money", [50000, 30000, 10000]),
+    return {"money": ints("POL_TM_EVENT_PRIZE_MONEY", "money", [5000, 3000, 1500]),
             "cards": ints("POL_TM_EVENT_PRIZE_CARDS", "cards", [3, 2, 1]),
             "pack": _env_int("POL_TM_EVENT_PRIZE_PACK", int(p.get("pack", 20))),
             "mission_money": _env_int("POL_TM_EVENT_MISSION_MONEY",
-                                      int(p.get("mission_money", 5000)))}
+                                      int(p.get("mission_money", 500))),
+            "class_money": ints("POL_TM_EVENT_CLASS_MONEY", "class_money", [300, 800, 1500])}
 
 
 def event_phase(now=None):

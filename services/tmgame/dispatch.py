@@ -867,6 +867,11 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
         # above `_einitent_enabled`; this cannot fire before the scene opens.
         if not tournament._einitent_enabled():
             return None
+        # A FRESH ENTRY IS NOT A RETURN FROM A GAME. A player who left after a
+        # game without coming back to the room still had that match marked
+        # playing, so their next entry got no @EventEn and timed out
+        # (TRM-0-37454, live 2026-10-03 17:31).
+        tournament.forget_played_match(member_id)
         card, ans = tournament._einitent_fields()
         ent = (protocol.encode_code(protocol.MSG_EINITENT)
                + (b"@EInitEnt=/Card=%d/Ans=%d" % (card, ans)))
