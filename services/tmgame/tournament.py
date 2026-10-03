@@ -590,7 +590,14 @@ def _event_prize_lines(member_id):
             my_steps = steps
             break
     row = board.get(str(member_id)) or {}
-    n = common._env_int("POL_TM_SHOP_N", 1)
+    # THE SHOP BYTE MUST NOT BE 1. The Event Shop waits on 0x101A10(0x13) until
+    # it returns exactly 1, and the 0x13 (@Init/@EcmInit) arm returns -1 for
+    # shop byte 1 (see the event deck pick in dispatch.py). 2026-10-03 cup: the
+    # winner's prize was credited but their client sat on a loading screen
+    # forever, never sending @Get=/@Quit=, after an @EcmInit with sh=1.
+    n = common._env_int("POL_TM_EVENT_PRIZE_SHOP", 2)
+    if n == 1:
+        n = 2
     money_before = purse.money_of(member_id)
 
     def ints(name, default):
