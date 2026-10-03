@@ -212,7 +212,12 @@ def _tm_event_list(path, n):
     # column is the RL ROOM name, not this.
     title = (os.environ.get("POL_TM_EVENT_TITLE") or _tm_event_info().get("guide")
              or "Win matches to move your chocobo up the track!|"
-                "Clear the three missions for extra prizes.").replace("|", "\n")
+                "Clear the three missions for extra prizes.")
+    # The start/end times this record carries are UTC (the client cannot
+    # convert: TM imports no local-time call), so say so.
+    if "UTC" not in title:
+        title += "|All times shown are UTC."
+    title = title.replace("|", "\n")
     for off, width, text in ((0x10, 0x20, zone), (0x30, 0x20, room),
                              (0x50, _EVL_REC - 0x50, title)):
         buf[r + off:r + off + width] = text.encode(

@@ -831,8 +831,16 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
                 or "Welcome to the %s!" % event_info().get("name", "tournament"))
             lines = [protocol.encode_code(protocol.MSG_EVENTTIMEANS)
                      + (b"@EventTimeReqCheck=/Start=%d/End=%d/Now=%d"
-                        % (start, end, now)),
-                     protocol.encode_code(0xD0) + b"@EventEn=/Ans=1"]
+                        % (start, end, now))]
+            if tournament.returning_from_game(member_id):
+                # Back from a tournament game, the client does not read
+                # @EventEn (2026-10-03 narration log: unread until the next
+                # full entry), and an unread one in its receive store is half
+                # of why the next seating failed (see the @Ready= answer).
+                common._say("tm:   ...member %s is back from a tournament game -- "
+                            "no @EventEn" % (member_id,))
+            else:
+                lines.append(protocol.encode_code(0xD0) + b"@EventEn=/Ans=1")
             if _ph == "closed":
                 # Results are final: the results pump waits for this, 60 s,
                 # then "Tallying tournament results". Only (0xD1,5) is drained
@@ -2545,7 +2553,13 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
                         peer=matchmaking._MATCH_PEER.get(pushqueue._push_key(member_id)))
             common._say("tm:   ...member %s is in a TOURNAMENT game: no take, no panel "
                  "question; queued %s" % (member_id, _cont[8:].decode()))
-            return body[:8] + (b"@Ready=/Go=%d" % go)
+            # NO /Go= ANSWER IN A TOURNAMENT GAME. The event board never reads
+            # it (2026-10-03 narration log: filed after both games, looked up
+            # 0 times; the board left on the @Continue alone). Unread, it sat
+            # in the client's one receive store, and with it there the NEXT
+            # seating never sent @CheckJoinTable: "Could not start game" after
+            # every finished game, while a fresh client always started.
+            return None
         if _rs and not vscom._in_com_game(member_id):
             # WARNING: A DECISIVE GAME SENDS @Ready= TWICE (measured 2026-09-07
             # 14:45Z): once off the result screen, once when the take scene

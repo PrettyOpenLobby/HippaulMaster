@@ -115,6 +115,13 @@ def _event_grace():
     return max(0, common._env_int("POL_TM_EVENT_MATCH_GRACE", 20))
 
 
+def returning_from_game(member_id):
+    """True when this member's tournament game has been played and they
+    have not been released back to the room yet."""
+    m = _EVENT_MATCH.get(member_id)
+    return bool(m and m.get("playing"))
+
+
 def _in_event_match(member_id):
     m = _EVENT_MATCH.get(member_id)
     return bool(m and m.get("started"))
