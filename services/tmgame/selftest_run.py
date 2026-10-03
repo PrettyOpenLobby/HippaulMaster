@@ -8,8 +8,8 @@ import tmbattle
 import struct
 from .deps import tmsave
 from . import (
-    cardshop, cardtables, careerstats, collection, common, dispatch, opener, protocol, purse,
-    pushqueue, savefile, selftest_ingame, selftest_match, selftest_tables, shopdoors, trade,
+    cardshop, cardtables, careerstats, collection, comai, common, dispatch, opener, protocol,
+    purse, pushqueue, savefile, selftest_ingame, selftest_match, selftest_tables, shopdoors, trade,
 )
 
 
@@ -93,6 +93,7 @@ def _selftest_all():
     # wrong direction order or a wrong roll is invisible on the wire and shows
     # up only as a match that plays itself wrong.
     ok = tmbattle.selftest(say=common._say) and ok
+    ok = comai.selftest(say=common._say) and ok
     ok = selftest_tables._selftest_packs() and ok
     ok = selftest_tables._selftest_seating() and ok
     ok = selftest_tables._selftest_cancel() and ok

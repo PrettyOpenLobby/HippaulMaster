@@ -7,9 +7,9 @@ import tmbattle
 import struct
 import time
 from . import (
-    boardrules, cardshop, cardtables, common, deps, matchmaking, matchstart, placement, pots,
-    protocol, purse, pushqueue, ruleset, scoring, seating, tableaudit, tablerow, tablesettings,
-    tournament, turns, watchers, webwatch,
+    boardrules, cardshop, cardtables, comai, common, deps, matchmaking, matchstart, placement,
+    pots, protocol, purse, pushqueue, ruleset, scoring, seating, tableaudit, tablerow,
+    tablesettings, tournament, turns, watchers, webwatch,
 )
 
 
@@ -430,6 +430,14 @@ def _house_prize(pot, opp_ranks, scores, seat=0):
                // 100)
 
 
+def _com_char(member_id, seat):
+    """The `/Com=` character index playing COM `seat` in this member's game;
+    the seat number itself when the roster never arrived (the same fallback
+    the deal uses)."""
+    coms = (_COM_GAME.get(pushqueue._push_key(member_id)) or {}).get("coms") or []
+    return coms[seat - 1] if 0 < seat <= len(coms) else seat
+
+
 def _com_deck_record(char_index):
     """The PackPrm record number for one COM character's deck.
 
@@ -474,8 +482,9 @@ def _queue_com_turns(chan, index, member_id, n, turn, active, after=None):
     again -- or the match is over, where `_queue_next_turn` takes the result.
 
     Every message gets a strictly increasing `after` so it rides its own
-    reply, in order -- the drain law, chained. Move choice is uniform random
-    over the empty tiles and the COM's remaining hand; `POL_TM_COM_PLAY=0`
+    reply, in order -- the drain law, chained. Move choice is `comai`'s:
+    uniform random over the empty tiles and the COM's remaining hand for the
+    low rungs, a scored search for the stronger opponents; `POL_TM_COM_PLAY=0`
     disables the whole player (restoring the parked-scene behaviour for an
     A/B).
 
@@ -576,9 +585,9 @@ def _queue_com_turns(chan, index, member_id, n, turn, active, after=None):
             turns._queue_next_turn(chan, index, [], limit, active,
                              roster=[(member_id, 0)], n_solo=n, after=a)
             return
-        hand_idx = rnd_moves.randrange(len(hand))
+        hand_idx, tile = comai.choose_move(chan, index, n, active, hand, empty,
+                                           _com_char(member_id, active), rnd_moves)
         row = hand.pop(hand_idx)
-        tile = rnd_moves.choice(empty)
         common._say("tm: 🤖 COM seat %d (turn %d) plays hand slot %d -- card %s -- "
              "onto tile %d. Watch for '---->Recv=PUTCARD'."
              % (active, turn, hand_idx, row.split(b"|")[0].decode(), tile))
@@ -644,10 +653,9 @@ def _com_play_acked(chan, index, member_id, n, turn, active):
         turns._queue_next_turn(chan, index, [], limit, active,
                          roster=[(member_id, 0)], n_solo=n)
         return None
-    rnd_moves = random.Random()
-    hand_idx = rnd_moves.randrange(len(hand))
+    hand_idx, tile = comai.choose_move(chan, index, n, active, hand, empty,
+                                       _com_char(member_id, active))
     row = hand.pop(hand_idx)
-    tile = rnd_moves.choice(empty)
     common._say("tm: 🤖 COM seat %d (turn %d, ack-released) plays hand slot %d -- "
          "card %s -- onto tile %d, answering the ack directly. Watch for "
          "'---->Recv=PUTCARD'."
