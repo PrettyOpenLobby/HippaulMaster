@@ -484,7 +484,7 @@ def _event_try_pair(room):
     # carries) and junk over 0x28EF44..0x28EF68 -- and the player's NEXT
     # seating never sends @CheckJoinTable ("Could not start game" after every
     # finished game). We offered the raw fixture id 0x21_0000n00n while the
-    # live PTL publishes canonical_table_id(n-1, room) (0xB62DC881_...), and
+    # live PTL publishes canonical_table_id(n-1, room) (0xAB12CD81_...), and
     # rows from #TM0T005 on are event-host copies (ptl._PTL_EVENT_HOST_FROM),
     # so no offered table was ever in the client's list.
     ntables = max(1, min(16, common._env_int("POL_TM_EVENT_TABLES", 4)))
