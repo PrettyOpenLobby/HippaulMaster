@@ -17,7 +17,7 @@ names.
 #:     client_guid
 #:
 #: verified against `accounts.db`: one test account (POL ID EFGH5678, nick
-#: UDXS6FWXX) has the stored `client_guid` 0x162E92CDC54, exactly b36(ALPHA).
+#: UGCH7WDQ4) has the stored `client_guid` 0x162E92CDC54, exactly b36(ALPHA).
 #: The TM0 peer the client addresses is nick USH6MZJA7 = POL ID `AAAC0001`, a
 #: SYNTHETIC service id the client makes up locally -- it is not a member of
 #: ours, which is why nothing server-side has ever known about it.
