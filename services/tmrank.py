@@ -1118,11 +1118,11 @@ def selftest():
           "tally_start must be the Tally Period's first day the client draws")
     # WARNING: A MIXED CAREER: tiles_total started 09-07, score_total did not.
     # A real 09-13 block read 4.00 (441 over 185 tiles, clipped).
-    lex = {"games": 64, "score_total": 441, "tiles_total": 185}
-    check(tiled_games_of(lex) == 11, "185 tiles = 11 tracked games")
-    check(rating_of(lex) == 228,
-          "untracked games must count 16 tiles each: got %d" % rating_of(lex))
-    check(rating_of(dict(lex, tiled_games=11)) == 228,
+    veteran = {"games": 64, "score_total": 441, "tiles_total": 185}
+    check(tiled_games_of(veteran) == 11, "185 tiles = 11 tracked games")
+    check(rating_of(veteran) == 228,
+          "untracked games must count 16 tiles each: got %d" % rating_of(veteran))
+    check(rating_of(dict(veteran, tiled_games=11)) == 228,
           "a stored tiled_games gives the same answer")
     check(rating_of({"games": 2, "score_total": 19}) == 278,
           "a block with no tiles_total is unchanged (16 per game)")
@@ -1137,7 +1137,7 @@ def selftest():
     # THE ELO VS. RATING (2026-09-27)
     check(all(elo_display(elo_of_display(v)) == v for v in range(100, 401)),
           "a seed must show exactly the board share it came from")
-    check(rating_of(lex) == board_rating_of(lex) == 228,
+    check(rating_of(veteran) == board_rating_of(veteran) == 228,
           "the switch moves no one who has not played since")
     check((elo_display(900), elo_display(1500), elo_display(2100), elo_display(9999))
           == (100, 250, 400, 400), "900..2100 spans 1.00..4.00, clamped")
