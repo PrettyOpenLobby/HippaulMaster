@@ -3045,3 +3045,11 @@ async function init(){
 init();
 </script></body></html>
 """
+
+
+def start(args):
+    """polboards' start hook: Tetra Master's tools for an OpenLobby admin panel
+    (tmadmin.py), when POL_TM_ADMIN_PORT is set. Here, not in the game server,
+    so restarting them never touches a match."""
+    import tmadmin
+    tmadmin.start()
