@@ -305,7 +305,7 @@ def resource_length(path):
                      f"`LN`=0, and a zero count closes the screen.")
         return 4
     if (tmrank is not None and path == tmrank.RKDATA
-            and corenames._peer_is_ps2()
+            and rankings._rkdata_ps2()
             and os.environ.get("POL_TM_RKDATA_PS2", "1") == "1"):
         # THE CONSOLE ASKS FOR 24, NOT THE PC's 28. Serving 28 + 4 is
         # what `sqMgReadFileCheck` rejected with -8250, rendered on

@@ -1,5 +1,6 @@
 """A member's gil: the stored balance, opening an account, clamped writes."""
 import os
+import time
 from . import collection, common
 
 
@@ -133,4 +134,26 @@ def _set_money(member_id, amount, why=""):
         return False
     common._say("tm: member %s money %d -> %d%s"
           % (member_id, was, data["money"], (" (%s)" % why) if why else ""))
+    _trail = _MONEY_TRAIL.setdefault(str(member_id), [])
+    _trail.append((int(time.time()), was, data["money"], why or ""))
+    del _trail[:-_TRAIL_KEEP]
     return True
+
+
+#: member -> the last few balance changes this process made, newest last:
+#: (unix time, before, after, why). Diagnostic only: the card shop's
+#: NOT DEBITING warning prints it, because that warning means the client's
+#: own wallet (which it prices and debits itself, TM.dll 0x11A3B1) held more
+#: than our balance, and the trail is where the two parted.
+_MONEY_TRAIL = {}
+_TRAIL_KEEP = 12
+
+
+def _money_trail(member_id):
+    """The recorded balance changes for this member, as one log string."""
+    rows = _MONEY_TRAIL.get(str(member_id)) or []
+    if not rows:
+        return "no balance change recorded by this process"
+    return "; ".join("%s %d -> %d (%s)" % (time.strftime("%H:%M:%SZ", time.gmtime(t)),
+                                           a, b, w or "-")
+                     for t, a, b, w in rows)

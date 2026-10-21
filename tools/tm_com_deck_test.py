@@ -36,6 +36,42 @@ def tiers(no):
     return sorted({d[0] for d in (T._pack_rec(no) or {}).get("draw") or [] if d[3] > 0 and d[0] != 255})
 
 
+def skill_and_elo_checks():
+    """The COM AI dial and the COM Elo read PlPrm.BIN's average rank (+0x04),
+    so with the real file both must VARY by opponent -- before PlPrm.BIN was
+    on prod every opponent read rank 200 and the dial topped out at 0.75."""
+    from tmgame import careerstats, comai, vscom
+    table = vscom._plprm()
+    check(len(table) == 31, "PlPrm.BIN: 30 opponents + the placeholder row", str(len(table)))
+    ranks = {i: vscom._com_avg_rank(i) for i in range(1, 31)}
+    check(len(set(ranks.values())) >= 25 and 200 not in (ranks[1], ranks[30]),
+          "average ranks differ per opponent (none of the ends reads the 200 fallback)",
+          repr(ranks))
+    check(ranks[1] == 300 and ranks[2] == 293 and ranks[29] == 111 and ranks[30] == 100,
+          "Natasha 3.00, Mick 2.93, ... the two strongest 1.11 and 1.00")
+    skills = {i: comai.skill_of(i) for i in range(1, 31)}
+    check(all(skills[i] == 0.0 for i in range(1, 10)),
+          "opponents 1-9 keep the random moves (skill 0)", repr(skills))
+    check(skills[30] == 1.0 and skills[29] > 0.9,
+          "the strongest opponent plays at skill 1.00 (live never went above 0.75)",
+          "%.2f / %.2f" % (skills[29], skills[30]))
+    order = sorted(range(1, 31), key=lambda i: ranks[i], reverse=True)
+    check(all(skills[a] <= skills[b] for a, b in zip(order, order[1:])),
+          "skill rises as the average rank falls")
+    check(len({round(skills[i], 3) for i in range(10, 31)}) >= 18,
+          "opponents 10-30 each get their own skill",
+          repr(sorted({round(skills[i], 2) for i in range(10, 31)})))
+    elos = {i: careerstats._com_elo(i) for i in range(1, 31)}
+    check(len(set(elos.values())) == 30 and min(elos, key=elos.get) == 1
+          and max(elos, key=elos.get) == 30,
+          "COM Elo: thirty different ratings, Natasha lowest, the strongest highest",
+          repr(elos))
+    # the house prize follows the same ranks: a stake-0 win over Mick is 153
+    check(vscom._house_prize(0, [ranks[2]], [6, 4], 0) == 153
+          and vscom._house_prize(0, [ranks[30]], [6, 4], 0) == 250,
+          "the house prize reads the same ranks (Mick 153, the strongest 250)")
+
+
 def main():
     if not T._plprm() or not T._packprm():
         print("[SKIP] tm_com_deck_test: services/tmdata/PlPrm.BIN or PackPrm.BIN "
@@ -58,6 +94,7 @@ def main():
         check(T._com_deck_record(22) == 26, "POL_TM_COM_DECKS=ladder restores the old guess (Vivi -> 26)")
     finally:
         del os.environ["POL_TM_COM_DECKS"]
+    skill_and_elo_checks()
     print()
     if FAILS:
         print(f"FAILED: {len(FAILS)} check(s)")

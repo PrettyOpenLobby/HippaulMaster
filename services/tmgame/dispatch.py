@@ -302,11 +302,20 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
                   % (member_id, msgid, shopdoors._checkout_money()))
         else:
             if checkout:
+                # SAY WHAT IS ON THE WIRE. The opener (@%s= above) carries
+                # the LIVE WALLET in /M= when it is @EcmInit (0x105816 stores
+                # it as the wallet; see `_init_body`), and the money section
+                # (@Data=, AUCMONEY) carries the proceeds, which the client
+                # ADDS on top. This line used to say the wallet was NOT sent,
+                # which stopped being true with the Check Out wallet fix.
                 common._say("tm: member %s @ShReq= msgid 0x%02X = auction Check Out -- "
-                      "serving /M=%d (proceeds awaiting collection), NOT the "
-                      "wallet (%d). The wallet here is what announced a card "
-                      "sale that never happened."
-                      % (member_id, msgid, amount, purse.money_of(member_id)))
+                      "@%s= /M=%s, money section @Data= /M=%d (proceeds awaiting "
+                      "collection, re-read after the auction sweep below), "
+                      "wallet %d"
+                      % (member_id, msgid, arm,
+                         ("%d (the live wallet)" % purse.money_of(member_id))
+                         if arm == "EcmInit" else "(parsed and discarded by this arm)",
+                         amount, purse.money_of(member_id)))
             money_line = shopdoors._aucmoney_line(member_id, amount)
             if money_line:
                 lines.append(money_line)
@@ -630,6 +639,13 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
                          "entirely."
                          % (member_id, _no.group(1).decode(), _cost, _bal,
                             _bal, _cost - _bal))
+                    # ...AND WHERE THE TWO PARTED. The PC client debits its OWN
+                    # wallet (0x11A3B1..0x11A3DE: wallet -= the listed pack's
+                    # PackPrm price), so it went ahead holding at least the
+                    # price; the server's recent ledger is the evidence for
+                    # where our figure fell behind.
+                    common._say("tm:   ...member %s balance trail: %s"
+                         % (member_id, purse._money_trail(member_id)))
                 else:
                     purse._set_money(member_id, max(0, _bal - _cost),
                                "pack /No=%s" % _no.group(1).decode())
@@ -1117,6 +1133,12 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
         # seen on a wire. Logged so they stop reading as "no answer".
         common._say("tm: member %s %s -- a fire-and-forget notice (no reply is "
              "polled for it)" % (member_id, cmd.split(b"=")[0].decode("latin1")))
+        if b"@ExitCh=" in cmd:
+            # `@ExitCh=` precedes the PART of the table channel, which for an
+            # observer is the end of the watch (measured 2026-10-03: 17:24:27Z
+            # PART #TM0T002, 17:24:28Z @ExitCh=, member 15 leaving the watch
+            # of table 2). Stop streaming that match to them.
+            watchers._stop_watching(member_id, "@ExitCh=")
         return None
 
     if b"@GameExit=" in cmd:
@@ -2078,6 +2100,10 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
         if seats and vscom._in_com_game(member_id):
             chan, index, seats = None, None, []
         com_n = None if seats else vscom._com_n(member_id)
+        if not seats and not com_n:
+            # A PvP player whose roster entry went missing mid-game: put it
+            # back from the other seats' entry (see `_recover_roster`).
+            chan, index, seats = matchmaking._recover_roster(member_id)
         if com_n:
             index = pushqueue._push_key(member_id)    # per-member COM match key
         n = len(seats) or com_n or 2
@@ -2103,16 +2129,35 @@ def _handle_line(body, peer="-", peer_nick=None, member_id=None):
                  % (member_id, _p.group(1).decode(), cmd))
             return None
         hand = (boardrules._MATCH_HANDS.get((chan, index)) or {}).get(pushqueue._push_key(member_id)) or []
+        if (not 0 <= hand_idx < len(hand) and seats
+                and common._env_int("POL_TM_HAND_FROM_DECK", 1)):
+            # THE HAND IS ALSO THE DEAL MINUS THE BOARD. Every flow that deals
+            # (a client's own pick, the event deal's synthetic pick, the
+            # departed-seat bot's hand) leaves a ("deck", seat) copy, and every
+            # card this seat has put down is on the board with its placer --
+            # so a play hand that went missing is rebuilt rather than the
+            # match stalling on it. Measured cause of the one live instance
+            # (2026-10-03T17:24:13Z) was a lost roster entry, fixed in
+            # `_match_abandoned`; this keeps any other loss from ending a game.
+            _rebuilt = boardrules._hand_from_deck(chan, index, actor)
+            if 0 <= hand_idx < len(_rebuilt):
+                boardrules._MATCH_HANDS.setdefault((chan, index), {})[
+                    pushqueue._push_key(member_id)] = _rebuilt
+                hand = _rebuilt
+                common._say("tm: WARNING: member %s played hand slot %d with no play "
+                     "hand on record -- REBUILT %d card(s) from the deal minus "
+                     "the board: %s" % (member_id, hand_idx, len(_rebuilt),
+                                        b", ".join(r.split(b"|")[0] for r in _rebuilt).decode()))
         if not 0 <= hand_idx < len(hand):
             # WARNING: DO NOT INVENT A CARD. A wrong `/D=` is a different card on the
             # board for both players and nothing anywhere reports it; an id at
             # or above the client's own limit ([0x2FF4FC]) or a type >= 4 is
             # `Error:CardNum=%d` and the arm bails. Say what is missing instead.
             common._say("tm: WARNING: member %s played hand slot %d but we hold %d card(s) "
-                 "for them -- no @PutCard sent. The hand is only ever learned "
-                 "from @CardSelect= (see _MATCH_HANDS); if that message was "
-                 "missed this match cannot be relayed."
-                 % (member_id, hand_idx, len(hand)))
+                 "for them -- no @PutCard sent. Neither a play hand nor a deal "
+                 "copy (@CardSelect=, see _MATCH_HANDS) exists for them at %s "
+                 "table %s, so this move cannot be relayed."
+                 % (member_id, hand_idx, len(hand), chan, index))
             return None
         row = hand[hand_idx]
         # WARNING: AND THE HAND COMPACTS. Measured off `0xC70F4`, the arm that runs

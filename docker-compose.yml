@@ -4,10 +4,16 @@
 #
 # With both repositories checked out side by side, from this directory:
 #
+#   python ../openlobby/tools/stack.py enable tm
+#   python ../openlobby/tools/stack.py compose up -d --build
+#
+# which runs, for Tetra Master alone (README.md, "By hand"):
+#
 #   docker compose --project-directory ../openlobby \
+#       --env-file ../openlobby/.env --env-file .env \
 #       -f ../openlobby/docker-compose.yml -f docker-compose.yml up -d --build
 #
-# (put that in a shell alias or use COMPOSE_FILE; see README.md). It replaces
+# It replaces
 # the core's login and authsess images with this one (the core plus the
 # title), and adds the weekly ranking job and, optionally, the live board.
 # Everything else - ports, volumes, the other services - is OpenLobby's.
@@ -29,17 +35,22 @@ services:
     image: hippaulmaster:latest
     build:
       context: ../hippaulmaster
+      dockerfile: Dockerfile
       args:
-        OPENLOBBY_IMAGE: "${OPENLOBBY_IMAGE:-openlobby:latest}"
+        # the image this one is layered on: POL_TITLE_BASE_IMAGE when titles
+        # are stacked (tools/stack.py in OpenLobby sets it), else the core
+        OPENLOBBY_IMAGE: "${POL_TITLE_BASE_IMAGE:-${OPENLOBBY_IMAGE:-openlobby:latest}}"
     pull_policy: build
     environment:
-      POL_TITLES: tmtitle
+      POL_TITLES: "${POL_TITLES:-tmtitle}"
       # the address a Tetra Master client dials for its zones; empty = the
       # core's POL_ADVERTISE
       POL_TM_ZONE_HOST: "${POL_TM_ZONE_HOST:-}"
       # an event window (unix seconds); -1/-1 = no event, the default
       POL_TM_EVENT_START: "${POL_TM_EVENT_START:--1}"
       POL_TM_EVENT_END: "${POL_TM_EVENT_END:--1}"
+      # who is on the event board: "hexid:name:score,..." (.env.example)
+      POL_TM_EVENT_MEMBERS: "${POL_TM_EVENT_MEMBERS:-}"
       # TOURNAMENTS: the members who see the extra `ENAAB<name>` zone in b/g/ZL
       # that opens the Event List (comma list of member ids, or `*`); empty =
       # no tournament door, the default. The zone's name and its room id.
@@ -53,10 +64,12 @@ services:
     image: hippaulmaster:latest
     pull_policy: never
     environment:
-      POL_TITLES: tmtitle
+      POL_TITLES: "${POL_TITLES:-tmtitle}"
       POL_TM_ZONE_HOST: "${POL_TM_ZONE_HOST:-}"
       POL_TM_EVENT_START: "${POL_TM_EVENT_START:--1}"
       POL_TM_EVENT_END: "${POL_TM_EVENT_END:--1}"
+      # who is on the event board: "hexid:name:score,..." (.env.example)
+      POL_TM_EVENT_MEMBERS: "${POL_TM_EVENT_MEMBERS:-}"
       POL_TM_EVENT_ZONE_MEMBERS: "${POL_TM_EVENT_ZONE_MEMBERS:-}"
       POL_TM_EVENT_ZONE_NAME: "${POL_TM_EVENT_ZONE_NAME:-Tournament Hall}"
       POL_TM_EVENT_ROOM_ID: "${POL_TM_EVENT_ROOM_ID:-81}"
@@ -95,7 +108,7 @@ services:
   # Optional: the live web board (standings, auctions, matches in progress),
   # drawn with art baked from your own client (tools/tm_boardart_bake.py).
   #   docker compose ... --profile board up -d
-  board:
+  tmboard:
     image: hippaulmaster:latest
     pull_policy: never
     restart: unless-stopped

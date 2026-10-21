@@ -7,7 +7,7 @@ import time
 import tmstore
 from . import (
     boardrules, common, matchstart, peers, pots, protocol, pushqueue, rematch, scoring, seating,
-    tableaudit, tablesettings, turns, vscom, webwatch,
+    tableaudit, tablesettings, turns, vscom, watchers, webwatch,
 )
 
 
@@ -675,6 +675,13 @@ def _remember_match(chan, index, who):
             rematch._reset_for_rematch(None, _k)
     for mid, _ident in seats:
         _MATCH_ROSTER[pushqueue._push_key(mid)] = (chan, index, seats)
+        # A PLAYER IS NOT AN OBSERVER. A member who watched a match and then
+        # sat down to play without a clean exit from the watch would otherwise
+        # keep receiving that match's stream (see `watchers._stop_watching`).
+        watchers._stop_watching(mid, "seated at %s table %s" % (chan, index))
+    # ...and not a cup game until `_event_deal` says so again.
+    from . import tournament
+    tournament._EVENT_DEALT.discard((chan, index))
     # A fresh announcement is a fresh game: nobody has accepted it yet.
     _MATCH_ACCEPTS.pop((chan, index), None)
     _MATCH_BOTS.pop((chan, index), None)
@@ -944,6 +951,48 @@ def _match_of(member_id):
     """
     got = _MATCH_ROSTER.get(pushqueue._push_key(member_id))
     return got if got else (None, None, [])
+
+
+def _recover_roster(member_id):
+    """Put back a roster entry this member lost while their match goes on.
+
+    For the in-match arms only, after `_match_of` came back empty and the
+    member is not in a VS. COM game. A match is still running for them when
+    another seat's entry names a table whose turn counter is live, whose
+    result has not gone out, and where this member is a seat the server is
+    NOT playing (a departed seat is a bot and must stay out). Returns
+    (chan, index, seats) after restoring the entry, or (None, None, []).
+
+    WARNING: THIS IS THE SAFETY NET, NOT THE FIX. The entry that went missing
+    on 2026-10-03T17:23:21Z was popped by `_match_abandoned` retiring a
+    DIFFERENT, older match (fixed there). Anything else that drops an entry
+    mid-game ends in the same place -- a placement that cannot be relayed --
+    so the arm asks here once before giving up. `POL_TM_RECOVER_ROSTER=0`
+    disables it.
+    """
+    if member_id is None or not common._env_int("POL_TM_RECOVER_ROSTER", 1):
+        return None, None, []
+    me = pushqueue._push_key(member_id)
+    seen = set()
+    for k, entry in list(_MATCH_ROSTER.items()):
+        if k == me or not entry:
+            continue
+        chan, index, seats = entry
+        if (chan, index) in seen:
+            continue
+        seen.add((chan, index))
+        if not any(pushqueue._push_key(m) == me for m, _v in seats or []):
+            continue
+        st = boardrules._MATCH_TURN.get((chan, index))
+        if not st or st.get("result_sent") or turns._is_bot(chan, index, member_id):
+            continue
+        _MATCH_ROSTER[me] = (chan, index, seats)
+        common._say("tm: WARNING: member %s had no roster entry while still seated in "
+             "the running match at %s table %s (turn %s) -- RESTORED it from the "
+             "other seats' entry so the move can be relayed"
+             % (member_id, chan, index, st.get("turn")))
+        return chan, index, seats
+    return None, None, []
 
 
 def _table_of_member(chan, member_id):

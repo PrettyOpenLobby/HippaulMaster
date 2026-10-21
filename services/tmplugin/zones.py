@@ -283,7 +283,7 @@ def _zone_host_live(path, data):
 #: time so it can never go stale.
 #:
 #: The shipped file had **127.0.0.1** baked into it, an address on a LAN the
-#: console is not on (it reaches us over the tailnet), so the string was
+#: console is not on (it reaches the server over the network), so the string was
 #: unreachable for every client that has ever read it.
 #:
 #: It is a host because of what consumes it: accessor 0x003a7320 hands the field

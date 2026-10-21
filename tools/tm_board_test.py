@@ -601,7 +601,7 @@ def bot_checks(tmp, boardtm, polboards, snap, args):
         st, r = post(cmd("status", "0"))
         check("/tmboard status says where each feed posts (anyone may ask)",
               "auction**: <#555>" in r["data"]["content"]
-              and "rankings**: its webhook's channel" in r["data"]["content"], r)
+              and "rankings**: nowhere here yet" in r["data"]["content"], r)
     finally:
         srv.shutdown()
 
@@ -642,7 +642,7 @@ def bot_checks(tmp, boardtm, polboards, snap, args):
           and not any(m == "GET" for m, _u in seq), seq)
     net3 = AutoNet(channel="99")
     # two polls: at most 3 posts go out per poll, and the watcher's snapshot is
-    # on the REAL clock, where every fixture listing is still running
+    # on the fixture's clock (main() pins it), where listings 21 and 22 run
     polboards.run_bot_feed(boardtm, args, "tm_auction", "auction",
                            "https://discord.com/api/webhooks/9/AUCSECRET", "BOTTOKEN",
                            opener=net3, rounds=2, period=0.01)
@@ -890,7 +890,16 @@ def main():
           and polboards.state_path(a2, "tm").endswith("tm_discord.json"))
     check("a message-set feed's knobs: 15 s per message, ended messages kept 10 min",
           a2.discord_slot_every == 15.0 and a2.discord_ended_ttl == 600.0)
-    bot_checks(tmp, boardtm, polboards, s, args)
+    # The bot's clicks and its feeds read cached_snapshot(), which is on the
+    # real clock. The fixture's listings end hours after NOW, and NOW is a
+    # fixed date that the real clock has passed, so on the real clock listing
+    # 22 is already sold. Give them the fixture's clock.
+    real_cached = boardtm.cached_snapshot
+    boardtm.cached_snapshot = lambda a=None, ttl=2.0: boardtm.snapshot(a, now=NOW)
+    try:
+        bot_checks(tmp, boardtm, polboards, s, args)
+    finally:
+        boardtm.cached_snapshot = real_cached
     watch_checks(tmp, boardtm, polboards, args)
 
     print("read-only")

@@ -270,6 +270,11 @@ def _queue_next_turn(chan, index, seats, turn, active, roster=None, n_solo=None,
             return
         rnd = matchstart._turn_rand((chan, index))
         scores = scoring._board_scores(chan, index, n)
+        # A CUP GAME? Read before the cup scoring runs, so nothing it does to
+        # the event state can move this game into the PvP prize path below.
+        _pvp_event = bool(not n_solo and roster
+                          and (tournament._is_event_match([m for m, _v in roster])
+                               or (chan, index) in tournament._EVENT_DEALT))
         tournament._event_score_game(roster, scores, chan, index)
         stats = {}
         # WHERE EACH SEAT FINISHED, which is the only input `Average Rank` has.
@@ -279,6 +284,13 @@ def _queue_next_turn(chan, index, seats, turn, active, roster=None, n_solo=None,
         # ...AND THE ELO VS. RATING (tmrank.elo_match), from everyone's
         # PRE-match rating, so it is worked out before any seat is written.
         elos = careerstats._match_elos(roster, scores, n, n_solo)
+        # THE OPPONENTS' AVERAGE RANKS FOR THE PvP HOUSE PRIZE, read BEFORE
+        # this match moves anybody's average (the loop below does that).
+        _pvp_house = bool(not n_solo and roster and not _pvp_event
+                          and common._env_int("POL_TM_HOUSE_PRIZE", 1)
+                          and common._env_int("POL_TM_HOUSE_PRIZE_PVP", 1))
+        _pre_ranks = ([vscom._member_avg_rank(m) for m, _v in roster]
+                      if _pvp_house else [])
         for i, (mid, _v) in enumerate(roster):
             stats[pushqueue._push_key(mid)] = careerstats._bump_result_stats(
                 mid, scores[i] if i < len(scores) else 0,
@@ -379,7 +391,56 @@ def _queue_next_turn(chan, index, seats, turn, active, roster=None, n_solo=None,
         # at the top refunds each player their own. Settled once (the escrow
         # is popped); the winner's NET gain feeds the prize tally the
         # ranking money lists sort on.
-        if not n_solo and common._env_int("POL_TM_WAGER", 1) \
+        #
+        # THE PvP HOUSE PRIZE. SE's guidebook prices the prize the same way
+        # against people as against COM characters ("play against players and
+        # COM characters with a high average rank", tactics srpm082; manual
+        # srpm030: "beating a player or COM character with a high average rank
+        # wins considerably more"):
+        #
+        #     {(4 - mean of the opponents' average ranks) x 0.5 + 1}
+        #         x (entry fee + 100) x players placed below you, x3 perfect
+        #
+        # and the client has one formula for both (0xCC719, `_house_prize`).
+        # The settlement is the COM path's, seat by seat: the stake taken at
+        # the accept quorum is not handed back on a win (the online client
+        # reads `wallet - stake + prize`), a draw at the top for everyone
+        # returns it, a seat with nobody below it is paid nothing, and a seat
+        # the server is playing for a departed player is paid nothing.
+        # Cup (event) games keep the pot settlement below unchanged.
+        # `POL_TM_HOUSE_PRIZE_PVP=0` restores the pot-only PvP settlement.
+        if _pvp_house:
+            _pstakes = pots._PVP_STAKES.pop((chan, index), None) or {}
+            _alldraw = bool(scores) and max(scores) == min(scores)
+            for _i, (_pm, _pv) in enumerate(roster):
+                _pk = pushqueue._push_key(_pm)
+                _own = int((_pstakes.get(_pk) or (None, 0))[1] or 0)
+                if _is_bot(chan, index, _pm):
+                    if _own:
+                        common._say("tm:   ...PvP stake of %d forfeited by member %s "
+                             "(left the match)" % (_own, _pm))
+                    pots._stake_clear(_pm)
+                    continue
+                _opp = [_pre_ranks[j] for j in range(len(scores))
+                        if j != _i and j < len(_pre_ranks)]
+                _pay = vscom._house_prize(_own, _opp, scores, _i)
+                if _alldraw:
+                    if _pay:
+                        purse._set_money(_pm, purse.money_of(_pm) + _pay,
+                                         "PvP draw -- stake returned")
+                elif _pay > 0:
+                    purse._set_money(_pm, purse.money_of(_pm) + _pay,
+                                     "PvP WIN -- house prize %d (stake %d, opponents' "
+                                     "average rank %s, scores %s)"
+                                     % (_pay, _own, "/".join(str(r) for r in _opp),
+                                        "/".join(str(v) for v in scores)))
+                    matchend._bump_prize(_pm, _pay, "PvP win")
+                else:
+                    common._say("tm:   ...PvP: member %s placed below everyone -- no "
+                         "prize; the %d stake is forfeit" % (_pm, _own))
+                prizes[_pk] = _pay
+                pots._stake_clear(_pm)
+        elif not n_solo and common._env_int("POL_TM_WAGER", 1) \
                 and common._env_int("POL_TM_WAGER_PVP", 1):
             _pstakes = pots._PVP_STAKES.pop((chan, index), None)
             if _pstakes:

@@ -409,6 +409,37 @@ def _roster_retire_stale(chan):
                 f"no process was listening)")
 
 
+def _tm_sessions_elsewhere(member_id):
+    """The Tetra Master channels (#TM0...) this member is still in on another
+    LIVE connection, as a set of channel names; empty when none.
+
+    The closing connection is already out of PRESENCE and ROOMS when the core
+    calls `session_closed`, so anything found here is a different socket. A
+    connection that is only in the PlayOnline lobby (the Viewer keeps one open
+    beside the game) does not count: a crashed game must still free its seat.
+    `POL_TM_CLOSE_KEEPS_LIVE_SEAT=0` restores the unconditional release."""
+    if member_id is None or os.environ.get("POL_TM_CLOSE_KEEPS_LIVE_SEAT", "1") != "1":
+        return set()
+    presence = getattr(corenames, "PRESENCE", None)
+    rooms = getattr(corenames, "ROOMS", None)
+    if presence is None or rooms is None:
+        return set()
+    out = set()
+    try:
+        for sess in presence.sessions_for(member_id) or []:
+            if getattr(sess, "alive", True) is False:
+                continue
+            for c in rooms.channels_of(sess) or []:
+                name = c.decode("latin1", "replace") if isinstance(c, (bytes, bytearray)) else str(c)
+                if name.startswith("#TM0"):
+                    out.add(name)
+    except Exception as exc:
+        corenames.log("authserv", f"  roster: live-session check failed ({exc!r}) -- "
+                        f"treating the close as the last one")
+        return set()
+    return out
+
+
 def _roster_retire_on_close(member_id):
     """The member's connection died without a PART. Retire their room record.
 
@@ -442,6 +473,25 @@ def _roster_retire_on_close(member_id):
     if os.environ.get("POL_TM_RETIRE_ON_CLOSE", "1") != "1":
         return
     try:
+        # ANOTHER CONNECTION OF THE SAME MEMBER IS STILL PLAYING. The core only
+        # calls this when no session of the member is left in the ROOM, but a
+        # player in a match is in the TABLE channel (#TM0T...) on a newer
+        # connection, so an OLD socket closing late (a leftover client, a
+        # phone that reconnected) used to release the seat the new one was
+        # playing from: 2026-09-25, "member 28 left #TM0R001 -- released
+        # table(s) 2" while member 28's live session was mid-match there, and
+        # the departed flag then declined the rematch for them. Leave the
+        # seat, the record and the watch to the live connection; its own exit
+        # (PART, @GameExit=, its close) cleans them up.
+        live = _tm_sessions_elsewhere(member_id)
+        if live:
+            corenames.log("authserv", f"  roster: member {member_id}'s connection "
+                            f"closed, but another of their connections is still "
+                            f"in {', '.join(sorted(live))} -- seats and room "
+                            f"record kept for it")
+            return
+        if tetramaster is not None:
+            tetramaster._stop_watching(member_id, "connection closed")
         # SEATS FIRST, WHILE `room_of` CAN STILL PLACE THEM. Retiring the record
         # first orphans the seat -- that is `_roster_note_departure`'s own
         # hard-won ordering, and the reason it carries a comment about it.

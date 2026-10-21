@@ -81,6 +81,41 @@ def _hands_from_cardselect(cmd):
     return [rows[i] for i in sorted(rows)]
 
 
+def _hand_from_deck(chan, index, seat):
+    """The hand `seat` still holds, rebuilt from what the server already knows:
+    the five it was dealt (the `("deck", seat)` copy kept at `@CardSelect=`)
+    minus the cards on the board that this seat PLACED. [] when there is no
+    deck copy.
+
+    The hand compacts as cards are played (see the `del hand[hand_idx]` in
+    the `@PutData=` arm), so removing each placed card's first match from the
+    dealt order gives the same list the client is indexing with `/H=`. A
+    placed card is matched on every field that cannot change on the board
+    (id, type, both defences, arrows); `attack` is left out because a special
+    tile can boost it after the placement.
+    """
+    deck = (_MATCH_HANDS.get((chan, index)) or {}).get(("deck", seat))
+    if not deck:
+        return []
+    keys = ("id", "type", "pdef", "mdef", "arrows")
+    placed = [c.row for c in (_MATCH_BOARD.get((chan, index)) or {}).values()
+              if getattr(c, "placer", None) == seat
+              and int(c.row.get("id", 0)) < 0x8000]
+    left = list(deck)
+    for prow in placed:
+        want = tuple(int(prow.get(k, 0)) for k in keys)
+        hit = next((i for i, r in enumerate(left)
+                    if tuple(int(tmbattle.unpack(r).get(k, 0)) for k in keys) == want),
+                   None)
+        if hit is None:
+            hit = next((i for i, r in enumerate(left)
+                        if int(tmbattle.unpack(r).get("id", -1)) == int(prow.get("id", -2))),
+                       None)
+        if hit is not None:
+            del left[hit]
+    return left
+
+
 def _putcard_body(seats, me, actor, hand_idx, tile, row, n_solo=None):
     """`@PutCard=` -- one card lands on the board. Arm 0x103820, `Recv=PUTCARD`.
 

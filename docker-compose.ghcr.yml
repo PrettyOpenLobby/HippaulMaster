@@ -20,6 +20,6 @@ services:
   tmrank:
     image: ghcr.io/prettyopenlobby/hippaulmaster:${HIPPAULMASTER_TAG:-${CRYSTALMASTER_TAG:-latest}}
     pull_policy: missing
-  board:
+  tmboard:
     image: ghcr.io/prettyopenlobby/hippaulmaster:${HIPPAULMASTER_TAG:-${CRYSTALMASTER_TAG:-latest}}
     pull_policy: missing

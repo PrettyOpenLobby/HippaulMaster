@@ -76,6 +76,20 @@ SUITES = [
     ("tm_store",      [PY, "tm_store_test.py"],                HERE,     True),
     # the files an earlier release kept, imported into those tables
     ("tm_import",     [PY, "tm_import_test.py"],               HERE,     True),
+    ("tm_pvp_gaps",   [PY, "tm_pvp_gaps_test.py"],             HERE,     True),
+    # The cup suites (tm_event_*), run here too so a change that breaks cup
+    # entry, pairing or prizes fails the TM suite and not only CI.
+    ("tm_event_deck_pick", [PY, "tm_event_deck_pick_test.py"], HERE, False),
+    ("tm_event_fair_pairing", [PY, "tm_event_fair_pairing_test.py"], HERE, False),
+    ("tm_event_prize_shop", [PY, "tm_event_prize_shop_test.py"], HERE, False),
+    ("tm_event_seen_restart", [PY, "tm_event_seen_restart_test.py"], HERE, False),
+    ("tm_event_settle", [PY, "tm_event_settle_test.py"], HERE, False),
+    ("tm_event_stale_answer", [PY, "tm_event_stale_answer_test.py"], HERE, False),
+    ("tm_event_start_failed", [PY, "tm_event_start_failed_test.py"], HERE, False),
+    ("tm_event_table_id", [PY, "tm_event_table_id_test.py"], HERE, False),
+    ("tm_event_ticker_seating", [PY, "tm_event_ticker_seating_test.py"], HERE, False),
+    ("tm_event_track", [PY, "tm_event_track_test.py"], HERE, False),
+    ("tm_event_unread_replies", [PY, "tm_event_unread_replies_test.py"], HERE, False),
     # the core's own resource suite, with this title loaded
     ("core_resource", [PY, os.path.join(CORE or "", os.pardir, "tools",
                                         "resource_test.py")],
@@ -92,7 +106,8 @@ SUITES = [
 NEEDS_DB = {"tetramaster", "tmrank", "tm_backfill", "tm_auction_mint",
             "tm_watch", "tm_board", "tm_faces", "tm_gameea_refuse",
             "tm_lobby_counts", "tm_roster_delta_base", "tm_roster_retire",
-            "tm_save_defaults", "tm_store", "tm_import", "core_resource"}
+            "tm_save_defaults", "tm_store", "tm_import", "core_resource",
+            "tm_pvp_gaps"}
 
 
 def _fresh_database():

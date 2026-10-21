@@ -375,6 +375,27 @@ def _com_avg_rank(char_index):
     return t[i][0] if 0 < i < len(t) else base
 
 
+def _member_avg_rank(member_id):
+    """A human player's average rank x100 for the prize formula: the career
+    `avg_rank` (`careerstats`, the save's +0x30, what Player Data shows),
+    clamped to 100..400.
+
+    OURS: a player with no placed game yet has no average, and the client's
+    own arithmetic over an unwritten +0x30 (0) would pay the top multiplier.
+    They are taken as `POL_TM_PRIZE_UNRANKED` (default 200, the same middle
+    value an unreadable PlPrm.BIN gives a COM opponent)."""
+    from . import collection
+    try:
+        blk = (collection._collection_load(member_id) or {}).get("rank") or {}
+        avg = int(blk.get("avg_rank") or 0)
+        placed = int(blk.get("placed") or blk.get("games") or 0)
+    except Exception:
+        avg, placed = 0, 0
+    if not avg or not placed:
+        return min(400, max(100, common._env_int("POL_TM_PRIZE_UNRANKED", _COM_RANK_DEFAULT)))
+    return min(400, max(100, avg))
+
+
 #: WARNING: EVERY WIN PAYS A HOUSE PRIZE, AND UNTIL 2026-09-26 THIS SERVER PAID NONE.
 #: A player with 0 gil beat Lumberjack Mick six times and earned nothing,
 #: because the settlement only doubled the stake and a broke player's stake is

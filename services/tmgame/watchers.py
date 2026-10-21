@@ -17,6 +17,60 @@ def _watchers_of(chan, index):
     return list((_MATCH_WATCHERS.get((chan, index)) or {}).values())
 
 
+def _stop_watching(member_id, why=""):
+    """This member is no longer an observer of anything: take them off every
+    watcher list and drop the per-turn stream still queued for the table peers
+    they were watching on. Returns the (chan, index) keys they were taken off.
+
+    WARNING: MEASURED 2026-10-03. Member 47 observed table 3 at 17:14:40Z,
+    left the watch at 17:15:36Z (`@ExitCh=`), and their connection closed at
+    17:15:48Z. Nothing took them off `_MATCH_WATCHERS`, so every later move of
+    that match (20 pushes: @PutCard, @WFCard, @TurnData, @ResultData) was
+    queued for them pinned to that table's peer, which their new connection
+    never carried; each sat 120-150 s and was dropped ("this connection never
+    carries"). They were the watched match's stream, not an opponent's moves.
+    `POL_TM_WATCH_EXIT_CLEANUP=0` keeps a watcher registered until @GameExit=.
+    """
+    key = pushqueue._push_key(member_id)
+    if key is None or not common._env_int("POL_TM_WATCH_EXIT_CLEANUP", 1):
+        return []
+    gone, peers = [], set()
+    for wkey, wset in list(_MATCH_WATCHERS.items()):
+        got = (wset or {}).pop(key, None)
+        if got is None:
+            continue
+        gone.append(wkey)
+        if len(got) > 1 and got[1]:
+            peers.add(got[1])
+        if not wset:
+            _MATCH_WATCHERS.pop(wkey, None)
+    dropped = 0
+    if peers:
+        with pushqueue._PUSH_LOCK:
+            q = pushqueue._PUSHES.get(key) or []
+            keep = []
+            for entry in q:
+                try:
+                    cmd = (int(entry[1][:8], 16) >> 8) & 0xFF
+                except (ValueError, TypeError, IndexError):
+                    cmd = -1
+                if (len(entry) > 2 and entry[2] in peers
+                        and cmd in _WATCH_SNAPSHOT_SUPERSEDES):
+                    dropped += 1
+                else:
+                    keep.append(entry)
+            if keep:
+                pushqueue._PUSHES[key] = keep
+            else:
+                pushqueue._PUSHES.pop(key, None)
+    if gone:
+        common._say("tm: 🔭 member %s stopped watching %s%s -- off the watcher list, "
+             "%d queued watcher push(es) dropped"
+             % (member_id, ", ".join("%s table %s" % k for k in gone),
+                (" (%s)" % why) if why else "", dropped))
+    return gone
+
+
 #: WARNING: RETRACTED 2026-09-03, SAME DAY: the watcher DOES read cmd 9/10/12 -- but
 #: only AFTER it has entered the play scene. The CLIENT TRACE (shim-CASPC,
 #: `Recv=WATCHCARD` -> `GamePlayInit`, and the player trace `Recv=STARTDATA` ->

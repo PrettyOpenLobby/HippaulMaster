@@ -57,7 +57,7 @@ def main():
 
     reset()
     T._EVENT_LAST_MET[frozenset((3, 15))] = time.time() - 30   # they just played
-    got = pair({3: 25, 15: 22, 52: 300})                      # ruuko waited longest
+    got = pair({3: 25, 15: 22, 52: 300})                      # 52 waited longest
     check(got is not None and 52 in got, "the longest-waiting player is matched first", str(got))
 
     reset()

@@ -545,8 +545,24 @@ def _match_abandoned(member_id, why):
     if left:
         webwatch._live_matches_write()
         return True
+    # ONLY THE ENTRIES THAT STILL NAME THIS MATCH. A seat in `seats` may
+    # belong to a member who has since been seated at ANOTHER table (their
+    # `_remember_match` wrote a new entry), and popping that entry here
+    # threw a live match away: 2026-10-03T17:23:21Z member 52 left the old
+    # cup match at table 4, member 64 (52's earlier opponent there) was
+    # mid-game at table 2, and this loop popped 64's table-2 entry. 64's next
+    # @PutData= then found no match and no hand ("played hand slot 2 but we
+    # hold 0 card(s)") and the game could not be relayed.
+    # `POL_TM_ABANDON_OWN_KEY_ONLY=0` restores the unconditional pop.
+    _own_only = common._env_int("POL_TM_ABANDON_OWN_KEY_ONLY", 1)
     for m, _v in seats:
-        matchmaking._MATCH_ROSTER.pop(pushqueue._push_key(m), None)      # departed/bot entries too
+        _mk = pushqueue._push_key(m)
+        _cur = matchmaking._MATCH_ROSTER.get(_mk)
+        if _own_only and _cur and (_cur[0], _cur[1]) != (chan, index):
+            common._say("tm:   ...member %s is in a newer match at %s table %s -- "
+                 "their roster entry stays" % (m, _cur[0], _cur[1]))
+            continue
+        matchmaking._MATCH_ROSTER.pop(_mk, None)      # departed/bot entries too
     rematch._reset_for_rematch(chan, index)
     matchmaking._MATCH_STARTED.pop((chan, index), None)
     matchmaking._MATCH_BEGAN.pop((chan, index), None)

@@ -24,9 +24,14 @@ move is the old uniform pick, the same draws as before. Above it:
   * the pick is the best expected score, blurred by noise and an occasional
     outright random move, both of which fade to nothing at skill 1.
 
+What the search knows of the human's cards on the board is what the human
+knows of the COM's: the card face, a tens digit per stat (`_seen`). The real
+battle still rolls on the exact stats.
+
 Knobs: `POL_TM_COM_AI=0` restores the uniform pick for every opponent;
 `POL_TM_COM_SKILL=<0..1>` forces one skill on every opponent (an A/B, or a
-server that wants them all hard).
+server that wants them all hard); `POL_TM_COM_AI_CEILING` sets the strongest
+opponent's skill (default 0.85).
 """
 import functools
 import os
@@ -72,10 +77,17 @@ def _strength_frac(char_index):
     return ladder.index(rec) / float(len(ladder) - 1)
 
 
+def _ceiling():
+    """The skill of the strongest opponent, `POL_TM_COM_AI_CEILING` (default
+    0.85). At 1.0 it never slips, and players found that unfair; at 0.85 about
+    one move in twenty-five is random and the rest are blurred a little."""
+    return min(1.0, max(0.1, _env_float("POL_TM_COM_AI_CEILING", 0.85)))
+
+
 def skill_of(char_index):
-    """0.0 (uniform random) .. 1.0 (best move every time) for one COM
-    opponent. Below `POL_TM_COM_AI_FLOOR` of the way up (default 0.25) it is
-    0; from there it climbs from 0.1 to 1.0 at the strongest opponent."""
+    """0.0 (uniform random) .. the ceiling for one COM opponent. Below
+    `POL_TM_COM_AI_FLOOR` of the way up (default 0.25) it is 0; from there it
+    climbs from 0.1 to `_ceiling()` at the strongest opponent."""
     if not common._env_int("POL_TM_COM_AI", 1):
         return 0.0
     if os.environ.get("POL_TM_COM_SKILL", ""):
@@ -84,7 +96,8 @@ def skill_of(char_index):
     floor = min(0.99, max(0.0, _env_float("POL_TM_COM_AI_FLOOR", 0.25)))
     if frac is None or frac < floor:
         return 0.0
-    return min(1.0, 0.1 + 0.9 * (frac - floor) / (1.0 - floor))
+    top = _ceiling()
+    return min(top, 0.1 + (top - 0.1) * (frac - floor) / (1.0 - floor))
 
 
 # --------------------------------------------------------------------------
@@ -134,10 +147,39 @@ def _p_beats(a_values, d_values):
     return win, lose
 
 
-def win_chance(att, dfn):
+#: What a star on the card face is read as: the mean of the 87 base stats of
+#: 100 or more in `CardPrm.BIN` (119.3, highest 226).
+STAR_GUESS = 120
+
+
+def _face_value(stat, modifier):
+    """A stat as the card face lets a player know it: the face shows the tens
+    digit after the modifier, a star at 100+ (`statChars` in boardtm.py), so
+    the guess is the middle of that band."""
+    shown = stat + modifier
+    if shown > 99:
+        return STAR_GUESS - modifier
+    return max(0, shown) // 10 * 10 + 5 - modifier
+
+
+def _seen(card, viewer):
+    """`card.row` as the seat `viewer` knows it. A card it placed itself (its
+    own deck, even after a capture) is known exactly; anyone else's card only
+    as its card face reads."""
+    if viewer is None or card.placer is None or card.placer == viewer:
+        return card.row
+    row = dict(card.row)
+    for k in ("attack", "pdef", "mdef"):
+        row[k] = _face_value(row[k], card.modifier)
+    return row
+
+
+def win_chance(att, dfn, viewer=None):
     """The chance the card `att` beats `dfn` (both `tmbattle.Card`s) in one
-    battle, draws re-rolled the way `_apply_placement` re-rolls them."""
-    a_stat, d_stat, _as, _ds = tmbattle._stats(att.row, dfn.row)
+    battle, draws re-rolled the way `_apply_placement` re-rolls them. With a
+    `viewer` seat, the other players' cards count only for what their faces
+    show, so the COM knows no more than the human across the table."""
+    a_stat, d_stat, _as, _ds = tmbattle._stats(_seen(att, viewer), _seen(dfn, viewer))
     a_raw = max(1, a_stat + att.modifier)
     d_raw = max(1, d_stat + dfn.modifier)
     win, lose = _p_beats(_mix(a_raw, att.ability, 1), _mix(d_raw, dfn.ability, 2))
@@ -178,7 +220,7 @@ def _outcomes(board, tiles, n, tile, actor, p=1.0, fought=frozenset(), depth=0):
                 board[t].owner = actor
         return [(p, board)]
     att, dfn = board[tile], board[target]
-    q = win_chance(att, dfn)
+    q = win_chance(att, dfn, viewer=actor)
     out = []
     if q > 0:
         won = _clone(board)
@@ -327,6 +369,26 @@ def selftest(say=print):
             say("FAIL: comai.win_chance of two equal cards is not 0.5")
             ok = False
 
+        # The COM sees the human's cards as their faces do: a 40 and a 49 both
+        # read "4", so they must look the same to it -- and must NOT without
+        # a viewer, or this check passes on a mask that does nothing.
+        com_card = tmbattle.Card(_row(5, 47, 47, 47, 0), 1)
+        low, high = (tmbattle.Card(_row(6, s, s, s, 0), 0) for s in (40, 49))
+        if win_chance(com_card, low, viewer=1) != win_chance(com_card, high, viewer=1):
+            say("FAIL: comai reads the exact stat of a human card, not its face")
+            ok = False
+        if win_chance(com_card, low) == win_chance(com_card, high):
+            say("FAIL: comai.win_chance ignores a 40 vs 49 defender without a viewer")
+            ok = False
+        # ...a card the COM placed itself stays exact after the human takes it,
+        # and a star reads as STAR_GUESS.
+        taken = tmbattle.Card(_row(7, 49, 49, 49, 0), 1)
+        taken.owner = 0
+        if _seen(taken, 1)["pdef"] != 49 or _seen(high, 1)["pdef"] != 45 \
+                or _seen(tmbattle.Card(_row(8, 180, 180, 180, 0), 0), 1)["pdef"] != STAR_GUESS:
+            say("FAIL: comai._seen %r / %r" % (_seen(taken, 1), _seen(high, 1)))
+            ok = False
+
         # A free flip: the human's card on tile 5 has no arrows; a COM card
         # with an E arrow (bit 2) on tile 4 takes it without a fight.
         boardrules._MATCH_BOARD[key] = {5: tmbattle.Card(_row(10, 30, 30, 30, 0), 0)}
@@ -393,9 +455,9 @@ def selftest(say=print):
         if len(table) > 2:
             by_rank = sorted(range(1, len(table)), key=lambda i: -table[i][0])
             skills = [skill_of(i) for i in by_rank]
-            if skills[0] != 0.0 or skills[-1] != 1.0 or any(
+            if skills[0] != 0.0 or abs(skills[-1] - _ceiling()) > 1e-9 or any(
                     b < a for a, b in zip(skills, skills[1:])):
-                say("FAIL: comai skill must climb 0 -> 1 with average rank, got %r"
+                say("FAIL: comai skill must climb 0 -> ceiling with average rank, got %r"
                     % ["%.2f" % v for v in skills])
                 ok = False
             # ...and the VS. Rating agrees: the strongest opponent rates at

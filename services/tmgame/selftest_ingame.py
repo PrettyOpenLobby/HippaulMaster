@@ -844,6 +844,11 @@ def _selftest_ingame():
         # (The stake-in half rides the accept quorum in _queue_vsgameinit;
         # here the settlement is exercised directly: a unique winner takes
         # the pot, a tie refunds each player their own stake.)
+        # THE POT SETTLEMENT IS NOW THE KNOB-OFF PATH: by default a PvP win
+        # pays SE's house prize (checked after this block and in
+        # tools/tm_pvp_gaps_test.py); POL_TM_HOUSE_PRIZE_PVP=0 keeps this.
+        _sv_hpp = os.environ.get("POL_TM_HOUSE_PRIZE_PVP")
+        os.environ["POL_TM_HOUSE_PRIZE_PVP"] = "0"
         _pk = ("#TM0RTEST", 8)
         collection._collection_store("tclm", {"cards": [], "money": 500}, sync_save=False)
         collection._collection_store("tclo", {"cards": [], "money": 300}, sync_save=False)
@@ -891,6 +896,36 @@ def _selftest_ingame():
                 or purse.money_of("tclo") != _wo_before + 100:
             common._say("FAIL: a PvP tie must refund each stake, got %d/%d"
                  % (purse.money_of("tclm"), purse.money_of("tclo"))); ok = False
+        boardrules._MATCH_OBJECTS.clear()
+        for _d in (boardrules._MATCH_BOARD, boardrules._MATCH_TURN, matchstart._TURN_RAND, boardrules._MATCH_HANDS,
+                   rematch._MATCH_CONTINUE, matchstart._CARD_READY):
+            _d.pop(_pk, None)
+        pots._PVP_STAKES.pop(_pk, None)
+        if _sv_hpp is None:
+            os.environ.pop("POL_TM_HOUSE_PRIZE_PVP", None)
+        else:
+            os.environ["POL_TM_HOUSE_PRIZE_PVP"] = _sv_hpp
+        # ...AND THE DEFAULT: the same 1-0 win pays the house prize. The loser
+        # has no placed game (average rank 2.00, OURS) and holds no card, so
+        # it is a perfect: ((400 - 200) / 2 + 100) x (200 + 100) x 3 / 100.
+        collection._collection_store("tclm", {"cards": [], "money": 500}, sync_save=False)
+        collection._collection_store("tclo", {"cards": [], "money": 300}, sync_save=False)
+        pots._PVP_STAKES[_pk] = {pushqueue._push_key("tclm"): ("tclm", 200),
+                            pushqueue._push_key("tclo"): ("tclo", 200)}
+        boardrules._MATCH_BOARD[_pk] = {0: tmbattle.Card(_rowA, 0)}
+        boardrules._MATCH_TURN.pop(_pk, None)
+        pushqueue._PUSHES.pop(pushqueue._push_key("tclm"), None)
+        turns._queue_next_turn("#TM0RTEST", 8, [("tclm", 0), ("tclo", 0)], 10, 0,
+                         roster=[("tclm", 0), ("tclo", 0)])
+        _prb = next((e[1] for e in (pushqueue._PUSHES.get(pushqueue._push_key("tclm")) or [])
+                     if b"@ResultData=" in e[1]), None)
+        _prd = selftest_tables._pipe_vals(_prb or b"", b"/D=")
+        if purse.money_of("tclm") != 500 + 1800 or purse.money_of("tclo") != 300 \
+                or len(_prd) < 2 or _prd[1] != b"1800":
+            common._say("FAIL: a PvP win pays the house prize (perfect over an "
+                 "unranked player at stake 200 = 1800) and serves it on /D= "
+                 "occ 1, got %d/%d %r" % (purse.money_of("tclm"),
+                                         purse.money_of("tclo"), _prb)); ok = False
         boardrules._MATCH_OBJECTS.clear()
         for _d in (boardrules._MATCH_BOARD, boardrules._MATCH_TURN, matchstart._TURN_RAND, boardrules._MATCH_HANDS,
                    rematch._MATCH_CONTINUE, matchstart._CARD_READY):

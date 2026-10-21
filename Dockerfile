@@ -22,3 +22,7 @@ COPY tools/ /app/tools/
 RUN python -c "import sys, live_sessions; hasattr(live_sessions, 'marker_key') or sys.exit('live_sessions.py is not the one from the OpenLobby image')"
 
 ENV POL_TITLES=tmtitle
+
+# login and authsess bind nothing below 1024, so this runs as the unprivileged
+# uid that owns the /data and /logs bind mounts (the core image creates it).
+USER 1000

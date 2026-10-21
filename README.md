@@ -29,8 +29,7 @@ job, and an optional live board.
 - This repository checked out as `hippaulmaster`, which is where the compose files
   look for it (`git clone https://github.com/PrettyOpenLobby/HippaulMaster.git hippaulmaster`).
   A checkout from before the rename, still named `crystalmaster`, needs renaming.
-- The OpenLobby core, checked out beside this repository and already built
-  once (`docker compose up -d --build` in that checkout)
+- The OpenLobby core, checked out beside this repository as `openlobby`
 - A Tetra Master client install of your own (the PlayOnline Viewer's
   `SquareEnix/TetraMaster` directory; US, EU and JP installs all work)
 - Docker with Compose v2, and Python 3.10+ on the host for the one
@@ -38,14 +37,15 @@ job, and an optional live board.
 
 ## Bring-up
 
+From this directory:
+
 ```
 # 1. the client's parameter tables, decoded from YOUR install (once):
 python tools/tmdata_build.py --client "C:/Program Files (x86)/PlayOnline/SquareEnix/TetraMaster"
 
-# 2. the services, applied on top of the core's compose file, in its project:
-cp .env.example .env
-docker compose --project-directory ../openlobby \
-    -f ../openlobby/docker-compose.yml -f docker-compose.yml up -d --build
+# 2. the services, with the core and any other game you have enabled:
+python ../openlobby/tools/stack.py enable tm
+python ../openlobby/tools/stack.py compose up -d --build
 ```
 
 Step 1 writes `services/tmdata/`: `CardPri.BIN` (the sell-price ladder),
@@ -58,12 +58,33 @@ with the client's own scheme. Only the card-name list ships with the
 repository (so a Japanese install still gets English card names on the
 board and in notices); the tables do not.
 
-Step 2 rebuilds the core's `login` and `authsess` containers from the
-`hippaulmaster` image (the core image plus this title) and starts the
-`tmrank` job. The long command is the price of running inside the core's
-project; put it in a shell alias, or set `COMPOSE_FILE` and
-`COMPOSE_PROJECT_NAME` in your environment. To take the title out again,
-run the core's own `docker compose up -d` from its checkout.
+Step 2 builds the core image, rebuilds the core's `login` and `authsess`
+containers from the `hippaulmaster` image (the core image plus this title)
+and starts the `tmrank` job. `stack.py` is OpenLobby's launcher for the core
+and its games (OpenLobby's docs/games.md): it remembers which games you
+enabled, runs them in the core's compose project, and when several games
+plug into `login` it builds their images one on another and lists them all
+in `POL_TITLES`. `python ../openlobby/tools/stack.py check` says whether the
+tables from step 1 are in place.
+
+Settings go in this directory's `.env` (copy `.env.example`); stack.py
+passes it to compose after OpenLobby's own `.env`. To take the title out
+again, `python ../openlobby/tools/stack.py disable tm`, then
+`python ../openlobby/tools/stack.py compose up -d --build --remove-orphans`.
+
+### By hand
+
+The command stack.py runs for Tetra Master alone, from this directory:
+
+```
+docker compose --project-directory ../openlobby \
+    --env-file ../openlobby/.env --env-file .env \
+    -f ../openlobby/docker-compose.yml -f docker-compose.yml up -d --build
+```
+
+Compose refuses an `--env-file` that does not exist, so leave out the one
+you have not created. Build the core first (`docker compose build` in
+`../openlobby`), since this image is built on `openlobby:latest`.
 
 ### Moving from an earlier release
 
@@ -98,11 +119,17 @@ nothing to import: a server that never ran a tournament has no
 ### Without building
 
 The image is published to `ghcr.io/prettyopenlobby/hippaulmaster` on every push,
-layered on the published OpenLobby image. Apply the pull-only overrides of
-both repositories after their compose files, from this directory:
+layered on the published OpenLobby image.
+`python ../openlobby/tools/stack.py compose --ghcr up -d` uses it, and the
+published images of the other games you enabled. By hand, apply the
+pull-only overrides of both repositories after their compose files, from
+this directory:
 
 ```
-docker compose --project-directory ../openlobby     -f ../openlobby/docker-compose.yml -f ../openlobby/docker-compose.ghcr.yml     -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+docker compose --project-directory ../openlobby \
+    --env-file ../openlobby/.env --env-file .env \
+    -f ../openlobby/docker-compose.yml -f ../openlobby/docker-compose.ghcr.yml \
+    -f docker-compose.yml -f docker-compose.ghcr.yml up -d
 ```
 
 `HIPPAULMASTER_TAG` and `OPENLOBBY_TAG` pick the versions (default `latest`).
@@ -129,7 +156,8 @@ one empty row, which is what its rankings screen needs to open.
 
 ## The live board (optional)
 
-`docker compose ... --profile board up -d` adds a read-only web page of the
+`python ../openlobby/tools/stack.py compose --profile board up -d` adds the
+`tmboard` service, a read-only web page of the
 standings, the auction and the matches in progress on port 8793 (bound to
 localhost; put a reverse proxy in front). It draws with art baked from your
 own client: run `python tools/tm_boardart_bake.py --client <install>` first

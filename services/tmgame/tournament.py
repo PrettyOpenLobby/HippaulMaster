@@ -616,6 +616,12 @@ def _event_deal(seats, band_of, chan=None, index=None):
     if chan is not None and index is not None:
         matchmaking._remember_match(chan, index, list(seats))
         scoring._EVENT_COUNTS.pop((chan, index), None)
+        # ...and remember that the game at this key is a CUP game, for the
+        # settlement (`turns._queue_next_turn`): cup games keep the pot
+        # settlement and pay no PvP house prize even if `_EVENT_MATCH` has
+        # already let one of the players go. A new match at the key forgets
+        # it (`matchmaking._remember_match`).
+        _EVENT_DEALT.add((chan, index))
     hands = {}
     for mid, _ident in seats:
         rows = _event_hand_rows(mid)
@@ -642,6 +648,10 @@ def _event_deal(seats, band_of, chan=None, index=None):
         except Exception as exc:
             common._say("tm: WARNING: event deal: synthetic @CardSelect for member %s "
                  "failed (%r)" % (mid, exc))
+
+
+#: (chan, index) keys whose current game was dealt by `_event_deal`.
+_EVENT_DEALT = set()
 
 
 EVENTCARD_CODE = 0x00070043     # code 0x43, msgid 7: @EventCard / @CardSelect

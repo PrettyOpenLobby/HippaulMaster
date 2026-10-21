@@ -75,6 +75,36 @@ _RANK_LIST_PATH = "U/g/TM0_RANKLIST"
 _RANK_LIST_REC = 232
 
 
+def _rkdata_ps2():
+    """Is the client on THIS lobby connection the PS2 build, for the TM0RkData
+    layout (24 bytes on the console, 28 on the PC)?
+
+    The basis is the client signature from the login NICK, which the auth hop
+    records in the session this lobby connection is bound to: PS2
+    `TTTTT7I...`, PC `TTTTTAI...` -- the same test the core's send pacing
+    uses (`_lobby_pace_ps2`). The core's `_peer_is_ps2()` reads back our own
+    status byte from the lobby hello and answers PS2 for every client, so a PC
+    asking for its rankings header was served the console's 24-byte layout.
+    With no signature (an unbound connection, an unfamiliar prefix) the old
+    answer stands, so a real PS2 never loses the layout it was proved on
+    (2026-09-09). `POL_TM_RKDATA_DETECT=magic` restores the old basis.
+    """
+    old = bool(corenames._peer_is_ps2())
+    if os.environ.get("POL_TM_RKDATA_DETECT", "sig") == "magic":
+        return old
+    sig = None
+    try:
+        if corenames._session_get is not None:
+            sig = corenames._session_get("client_sig")
+    except Exception:                                        # noqa: BLE001
+        sig = None
+    if isinstance(sig, str) and sig.startswith("TTTTT7I"):
+        return True
+    if isinstance(sig, str) and sig.startswith("TTTTTAI"):
+        return False
+    return old
+
+
 def _rkdata_for_build(path, data):
     """`b/g/TM0RkData` as THIS client's build reads it.
 
@@ -97,7 +127,7 @@ def _rkdata_for_build(path, data):
     """
     if tmrank is None or path != tmrank.RKDATA:
         return data
-    if not corenames._peer_is_ps2() or os.environ.get("POL_TM_RKDATA_PS2", "1") != "1":
+    if not _rkdata_ps2() or os.environ.get("POL_TM_RKDATA_PS2", "1") != "1":
         return data
     out = tmrank.to_ps2(data)
     corenames.log("lobby", f"  3:0 {path!r}: PS2 layout -- {len(data)}B PC header sliced "

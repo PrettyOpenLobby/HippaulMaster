@@ -170,6 +170,113 @@ tmroom.note_pol_id(9, "AAAABBBBCCCCDDDD")     # this process just learned better
 check(tmroom.pol_id_of(9) == "AAAABBBBCCCCDDDD",
       "a live capture wins over the published snapshot")
 
+# --------------------------------------------------------------------------- #
+# THE 09-25 SHAPE: AN OLD CONNECTION CLOSING MUST NOT FREE THE NEW ONE'S SEAT.
+# A leftover client signed in as the same account exited while the member's
+# current connection was seated and playing at table 2 ("member 28 left
+# #TM0R001 -- released table(s) 2"). The core only checks the ROOM channel; a
+# player in a match is in the TABLE channel on the other connection.
+from tmgame import seating                                         # noqa: E402
+from tmplugin import corenames as CN                               # noqa: E402
+
+
+class _Live:
+    def __init__(self, mid, chans, alive=True):
+        self.member_id, self.chans, self.alive = mid, chans, alive
+
+
+class _Presence:
+    def __init__(self, sessions):
+        self.sessions = sessions
+
+    def sessions_for(self, mid):
+        return [s for s in self.sessions if s.member_id == mid]
+
+
+class _Rooms:
+    def channels_of(self, sess):
+        return list(sess.chans)
+
+
+def seat_28(chan):
+    seed(chan)
+    tmroom.note_member(28, tmroom.synth_member(chan, 28, "PhoneUser"), chan)
+    seating._SEATED_ADOPTED.add(chan)
+    seating._SEATED[chan] = {2: [(28, b"PEER2")]}
+
+
+real_presence, real_rooms = CN.PRESENCE, CN.ROOMS
+try:
+    seat_28(chan)
+    CN.PRESENCE = _Presence([_Live(28, [b"#TM0T002"])])
+    CN.ROOMS = _Rooms()
+    R._roster_retire_on_close(28)
+    check(seating._SEATED[chan].get(2) == [(28, b"PEER2")],
+          "an old connection closing leaves the seat the live one plays from",
+          repr(seating._SEATED[chan]))
+    check(tmroom.room_of(28) == chan, "...and the room record")
+
+    # the live connection then closes too: now it IS the last one
+    CN.PRESENCE = _Presence([])
+    R._roster_retire_on_close(28)
+    check(not seating._SEATED[chan].get(2), "the LAST connection closing frees the seat",
+          repr(seating._SEATED[chan]))
+
+    # a Viewer lobby connection is not a Tetra Master connection: a crashed
+    # game must still free its seat
+    seat_28(chan)
+    CN.PRESENCE = _Presence([_Live(28, [b"#POLLOBBY"])])
+    R._roster_retire_on_close(28)
+    check(not seating._SEATED[chan].get(2),
+          "a connection in no #TM0 channel does not hold the seat")
+
+    # the knob restores the unconditional release (so the check can fail)
+    seat_28(chan)
+    CN.PRESENCE = _Presence([_Live(28, [b"#TM0T002"])])
+    os.environ["POL_TM_CLOSE_KEEPS_LIVE_SEAT"] = "0"
+    try:
+        R._roster_retire_on_close(28)
+    finally:
+        os.environ.pop("POL_TM_CLOSE_KEEPS_LIVE_SEAT", None)
+    check(not seating._SEATED[chan].get(2),
+          "POL_TM_CLOSE_KEEPS_LIVE_SEAT=0: the 09-25 release comes back")
+finally:
+    CN.PRESENCE, CN.ROOMS = real_presence, real_rooms
+    seating._SEATED.pop(chan, None)
+
+# --------------------------------------------------------------------------- #
+# THE RANKINGS HEADER LAYOUT IS CHOSEN BY THE CLIENT'S BUILD, NOT BY OUR OWN
+# ECHOED STATUS BYTE. `_peer_is_ps2()` says PS2 for every client; the login
+# NICK's signature (PS2 TTTTT7I..., PC TTTTTAI...) is what tells them apart.
+import tmrank                                                      # noqa: E402
+from tmplugin import rankings, fetches                             # noqa: E402
+
+real_sig, real_ps2 = CN._session_get, CN._peer_is_ps2
+pc_head = bytes(range(28))
+try:
+    CN._peer_is_ps2 = lambda: True                # what the live hello always says
+    for sig, want_len, what in (("TTTTTAIABCDEFGH", 28, "a PC"),
+                                ("TTTTT7IABCDEFGH", 24, "a PS2"),
+                                (None, 24, "an unknown client (the old answer)")):
+        CN._session_get = (lambda s: (lambda k: s if k == "client_sig" else None))(sig)
+        got = rankings._rkdata_for_build(tmrank.RKDATA, pc_head)
+        check(len(got) == want_len, f"{what} is served the {want_len}-byte TM0RkData",
+              f"{len(got)}B")
+        n = fetches.resource_length(tmrank.RKDATA)
+        check((n is None) if want_len == 28 else (n == tmrank.RKDATA_LEN_PS2 + 4),
+              f"...and declared at the matching length for {what}", repr(n))
+    check(rankings._rkdata_for_build(tmrank.RKDATA, pc_head)[:4] == pc_head[4:8],
+          "the PS2 view is the PC header from +0x04 (unchanged)")
+    CN._session_get = lambda k: "TTTTTAIABCDEFGH" if k == "client_sig" else None
+    os.environ["POL_TM_RKDATA_DETECT"] = "magic"
+    try:
+        check(len(rankings._rkdata_for_build(tmrank.RKDATA, pc_head)) == 24,
+              "POL_TM_RKDATA_DETECT=magic: the old answer, PS2 for a PC (can fail)")
+    finally:
+        os.environ.pop("POL_TM_RKDATA_DETECT", None)
+finally:
+    CN._session_get, CN._peer_is_ps2 = real_sig, real_ps2
+
 print()
 print("roster-retire: " + ("OK" if not FAILS else f"FAILED ({len(FAILS)})"))
 for f in FAILS:
