@@ -67,6 +67,8 @@ SUITES = [
     ("tm_deck_slot_growth", [PY, "tm_deck_slot_growth_test.py"], HERE, False),
     ("tm_event_release", [PY, "tm_event_release_test.py"],     HERE,     False),
     ("tm_gameea_refuse", [PY, "tm_gameea_refuse_test.py"],     HERE,     False),
+    # the tools for the admin panel (tmadmin.py), over HTTP
+    ("tmadmin",       [PY, "tmadmin_test.py"],                 HERE,     True),
     # --- the seam with the core: the roster, the counts, the save defaults --
     ("tm_lobby_counts", [PY, "tm_lobby_counts_test.py"],       HERE,     True),
     ("tm_roster_delta_base", [PY, "tm_roster_delta_base_test.py"], HERE, True),
@@ -104,7 +106,7 @@ SUITES = [
 #: names and portraits come from the account tables), the import of the old
 #: files, and the core's resource suite, whose accounts live in PostgreSQL too
 NEEDS_DB = {"tetramaster", "tmrank", "tm_backfill", "tm_auction_mint",
-            "tm_watch", "tm_board", "tm_faces", "tm_gameea_refuse",
+            "tm_watch", "tm_board", "tm_faces", "tm_gameea_refuse", "tmadmin",
             "tm_lobby_counts", "tm_roster_delta_base", "tm_roster_retire",
             "tm_save_defaults", "tm_store", "tm_import", "core_resource",
             "tm_pvp_gaps"}

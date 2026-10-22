@@ -20,6 +20,10 @@ The panel gets three pages, each its own moderator permission, and their actions
                   issues one, tmgame.cardshop), refused while they are signed in to PlayOnline,
                   because a running client can save its old collection over the new card
 
+The account window's "In the games" asks it about one player (player.json): each of the
+account's members with a collection, by handle, with its cards, gil, card level, VS. rating,
+average finish and title, and whether it is in a Tetra Master room now.
+
 Every change is logged here and, through the panel, in the panel's activity log with the
 moderator's name.
 """
@@ -209,6 +213,78 @@ def give_card(handle, card, actor):
 
 
 # --------------------------------------------------------------------------- #
+# one player, for the panel's account window
+# --------------------------------------------------------------------------- #
+def members_of(who):
+    """{member id: handle name} for the account the panel describes: its member ids, its
+    handle names (any case) and its POL ID, each as the account tables hold them."""
+    import accounts
+    ids = set()
+    for m in who.get("members") or []:
+        if str(m).strip().isdigit():
+            ids.add(int(str(m).strip()))
+    db = accounts.connect()
+    try:
+        for h in who.get("handles") or []:
+            r = db.execute("SELECT member_id FROM handle WHERE lower(handle_name) = lower(%s)",
+                           (str(h or "").strip(),)).fetchone()
+            if r:
+                ids.add(int(r["member_id"]))
+        polid = str(who.get("polid") or "").strip().upper()
+        if polid:
+            ids |= {int(r["id"]) for r in db.execute(
+                "SELECT id FROM member WHERE polid = %s", (polid,)).fetchall()}
+        return {m: accounts.primary_handle(db, m) or "" for m in sorted(ids)}
+    finally:
+        db.close()
+
+
+def _x100(v):
+    return "%d.%02d" % (int(v) // 100, int(v) % 100)
+
+
+def player(who):
+    """What Tetra Master knows of one account: one entry per member with a collection,
+    named by its handle -> {"characters": [...]} or None when none has played."""
+    import tm_title
+    import tmrank
+    import tmroom
+    chars = []
+    pools = tmrank.observed_pools()
+    for mid, name in members_of(who).items():
+        data = tmrank.collection_of(mid)
+        if not data:
+            continue
+        stats = tmrank.stats_of(data)
+        blk = data.get("rank") if isinstance(data.get("rank"), dict) else {}
+        money = int(data.get("money") or 0)
+        cards = data.get("cards") if isinstance(data.get("cards"), list) else []
+        level = (pools.get(str(mid)) or {}).get("card_level")
+        avg = int(blk.get("avg_rank") or 0)
+        facts = [{"label": "cards", "value": "{:,}".format(len(cards))},
+                 {"label": "gil", "value": "{:,}".format(money)}]
+        if level is not None:
+            facts.append({"label": "card level", "value": str(level)})
+        if stats["games"]:
+            facts.append({"label": "VS. rating", "value": _x100(stats["rating"])})
+            if avg:
+                facts.append({"label": "average finish", "value": _x100(avg)})
+            if int(blk.get("streak") or 0):
+                facts.append({"label": "best win streak", "value": str(int(blk["streak"]))})
+        title = (tm_title.title_name(tm_title.title_index(money, level or 0, avg))
+                 if stats["games"] and avg else "")
+        games = stats["games"]
+        detail = ", ".join(x for x in (title, "%d game%s" % (games, "" if games == 1 else "s")) if x)
+        try:
+            online = tmroom.room_of(mid) is not None and signed_in(mid)
+        except Exception:                               # noqa: BLE001 -- the room list is a nicety
+            online = None
+        chars.append({"name": name or "member %d" % mid, "detail": detail, "online": online,
+                      "facts": facts[:6]})
+    return {"characters": chars, "note": ""} if chars else None
+
+
+# --------------------------------------------------------------------------- #
 # the pages
 # --------------------------------------------------------------------------- #
 def _left(sec):
@@ -298,6 +374,8 @@ def build():
                            "detail": "%s gil, %s" % ("{:,}".format(x["high"] or x["price"]), _left(x["left"])),
                            "state": "bids" if x["bids"] else "open"} for x in rows[:50]],
                 "facts": facts}
+
+    port.player(player)
 
     @port.tool("auction", "Auction house", "auction")
     def auction(method, sub, query, body, actor):

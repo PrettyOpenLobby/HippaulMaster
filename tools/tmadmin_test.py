@@ -7,7 +7,9 @@ over HTTP, the way the panel's proxy calls them.
 Two made-up players, one signed in; one listing with no bids and one with a bid. Checks the
 token, the description, the status, the three pages, taking a listing down (its card owed back
 to the seller, the row gone, a listing with bids refused), gil to Check Out, and a card into a
-signed-out player's collection (refused while signed in). Throwaway PostgreSQL (tmpg.py).
+signed-out player's collection (refused while signed in), and the account window's player
+lookup (by handle, POL ID and member id; nothing for a player who never played, and nothing
+sensitive). Throwaway PostgreSQL (tmpg.py).
 """
 import json
 import os
@@ -130,6 +132,41 @@ r = urllib.request.Request(url + "/openlobby/actions/gil", data=json.dumps({"han
 with urllib.request.urlopen(r, timeout=15) as resp:
     out = json.loads(resp.read())
 check("the gil action works for the panel too", out["ok"] and tmauction.pending(lex)["money"] == 10, out)
+
+print("one player, for the account window")
+check("the description says it answers for a player", desc.get("player") is True, desc)
+data = collection._collection_load(lex)
+data.update({"money": 12345, "rank": {"games": 4, "score_total": 30, "tiles_total": 64, "avg_rank": 150,
+                                      "placed": 4, "place_total": 600, "streak": 3}})
+collection._collection_store(lex, data, sync_save=False)
+
+
+def player(**q):
+    st, body = get("/openlobby/player.json?" + urllib.parse.urlencode(q))
+    return st, json.loads(body)
+
+
+st, doc = player(polid="", handles="lex", members="")
+ch = (doc.get("characters") or [{}])[0]
+facts = {f["label"]: f["value"] for f in ch.get("facts") or []}
+check("a player by handle (any case): their name, cards, gil and rating",
+      st == 200 and len(doc["characters"]) == 1 and ch["name"] == "Lex"
+      and facts.get("cards") == "1" and facts.get("gil") == "12,345" and "VS. rating" in facts
+      and facts.get("average finish") == "1.50" and facts.get("best win streak") == "3", doc)
+check("...the games in the line under the name, and not in a room", "4 games" in ch.get("detail", "")
+      and ch["online"] is False, ch)
+check("...a handful of facts at most", len(ch["facts"]) <= 6, ch["facts"])
+st, doc2 = player(polid="LEXP1234", handles="", members="")
+check("the same player by POL ID", doc2.get("characters") == doc["characters"], doc2)
+st, doc3 = player(polid="", handles="", members=str(lex))
+check("...and by member id", doc3.get("characters") == doc["characters"], doc3)
+st, none = player(polid="NOBODY00", handles="Nobody", members="")
+check("an account the game never saw is nothing", st == 200 and none == {}, none)
+st, mdoc = player(polid="", handles="Mira", members="")
+check("a member with no collection is nothing too", mdoc == {}, mdoc)
+text = json.dumps(doc) + json.dumps(doc2)
+check("nothing sensitive in the answer",
+      not any(s in text for s in ("polid-pw", "pw-lex", "127.0.0.1", "LEXP1234", "session", "token")), text)
 
 port.stop()
 print("tmadmin_test: %s" % ("all checks passed" if not fails else "%d FAILED" % len(fails)))

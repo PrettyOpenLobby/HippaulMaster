@@ -52,8 +52,11 @@ def skill_and_elo_checks():
     skills = {i: comai.skill_of(i) for i in range(1, 31)}
     check(all(skills[i] == 0.0 for i in range(1, 10)),
           "opponents 1-9 keep the random moves (skill 0)", repr(skills))
-    check(skills[30] == 1.0 and skills[29] > 0.9,
-          "the strongest opponent plays at skill 1.00 (live never went above 0.75)",
+    # d4c20b97 capped the strongest at POL_TM_COM_AI_CEILING (default 0.85):
+    # at 1.0 it never slipped, and players found that unfair
+    check(abs(skills[30] - 0.85) < 1e-9 and 0.75 < skills[29] < skills[30],
+          "the strongest opponent plays at the 0.85 ceiling, the next just below"
+          " it (live never went above 0.75)",
           "%.2f / %.2f" % (skills[29], skills[30]))
     order = sorted(range(1, 31), key=lambda i: ranks[i], reverse=True)
     check(all(skills[a] <= skills[b] for a, b in zip(order, order[1:])),
